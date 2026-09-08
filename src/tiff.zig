@@ -4,20 +4,24 @@ const c = @import("c.zig").c;
 pub const GeoTiff = @This();
 
 pub const ReadElevationFn = *const fn (
-    self: GeoTiff,
+    self: *GeoTiff,
     allocator: std.mem.Allocator,
     target_x: f64,
     target_y: f64,
 ) anyerror!?f32;
 
-pub const LayoutData = union {
+pub const LayoutData = union(enum) {
     tiled: struct {
         tile_width: u32,
         tile_height: u32,
+        tile_buf: []u8,
+        cached_tile_x: ?u32 = null,
+        cached_tile_y: ?u32 = null,
     },
     striped: struct {},
 };
 
+allocator: std.mem.Allocator,
 tif: *c.TIFF,
 gtif: *c.GTIF,
 
@@ -36,7 +40,7 @@ defn: c.GTIFDefn,
 layout: LayoutData,
 read_elevation_fn: ReadElevationFn,
 
-pub fn open(path: []const u8) !GeoTiff {
+pub fn open(allocator: std.mem.Allocator, path: []const u8) !GeoTiff {
     const tif = c.XTIFFOpen(path.ptr, "r") orelse return error.FileOpenError;
     errdefer c.XTIFFClose(tif);
     const gtif = c.GTIFNew(tif) orelse return error.GeoTiffNewError;
@@ -92,11 +96,16 @@ pub fn open(path: []const u8) !GeoTiff {
         if (c.TIFFGetField(tif, c.TIFFTAG_TILELENGTH, &tile_h) != 1)
             return error.TIFFGetHeightError;
 
-        layout = .{ .tiled = .{ .tile_width = tile_w, .tile_height = tile_h } };
+        layout = .{ .tiled = .{
+            .tile_width = tile_w,
+            .tile_height = tile_h,
+            .tile_buf = try allocator.alloc(u8, @as(usize, @intCast(c.TIFFTileSize(tif)))),
+        } };
         read_fn = readTiledElevation;
     }
 
     return GeoTiff{
+        .allocator = allocator,
         .tif = tif,
         .gtif = gtif,
         .width = width,
@@ -116,11 +125,18 @@ pub fn open(path: []const u8) !GeoTiff {
 pub fn close(self: GeoTiff) void {
     c.GTIFFree(self.gtif);
     c.XTIFFClose(self.tif);
+
+    switch (self.layout) {
+        .tiled => |tiled| {
+            self.allocator.free(tiled.tile_buf);
+        },
+        .striped => {},
+    }
 }
 
 /// Reads the elevation value at the specified coordinates (target_x, target_y) GeoTIFF file.
 /// Target coordinates need to be in the same coordinate system as the GeoTIFF file. Use the `transformCoordinates` function to convert from WGS84 (EPSG:4326) if necessary.
-pub inline fn readElevation(self: GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
+pub inline fn readElevation(self: *GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
     return self.read_elevation_fn(self, allocator, target_x, target_y);
 }
 
@@ -129,7 +145,9 @@ pub const TiledLayout = struct {
     tile_height: u32,
 };
 
-fn readTiledElevation(self: GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
+fn readTiledElevation(self: *GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
+    _ = allocator;
+
     const col_f = (target_x - self.origin_x) / self.pixel_scale_x;
     const row_f = (self.origin_y - target_y) / self.pixel_scale_y;
 
@@ -140,15 +158,19 @@ fn readTiledElevation(self: GeoTiff, allocator: std.mem.Allocator, target_x: f64
 
     if (col >= self.width or row >= self.height) return null;
 
-    const tile_buf = try allocator.alloc(u8, @as(usize, @intCast(c.TIFFTileSize(self.tif))));
-    defer allocator.free(tile_buf);
+    const tile = self.layout.tiled;
+    const tile_col = col - (col % tile.tile_width);
+    const tile_row = row - (row % tile.tile_height);
 
-    if (c.TIFFReadTile(self.tif, tile_buf.ptr, col, row, 0, 0) < 0) {
-        return error.TIFFReadTileError;
+    if (tile.cached_tile_x != tile_col or tile.cached_tile_y != tile_row) {
+        if (c.TIFFReadTile(self.tif, tile.tile_buf.ptr, col, row, 0, 0) < 0) {
+            return error.TIFFReadTileError;
+        }
+        self.layout.tiled.cached_tile_x = tile_col;
+        self.layout.tiled.cached_tile_y = tile_row;
     }
 
-    const samples = std.mem.bytesAsSlice(f32, tile_buf);
-    const tile = self.layout.tiled;
+    const samples = std.mem.bytesAsSlice(f32, tile.tile_buf);
     const local_col = col % tile.tile_width;
     const local_row = row % tile.tile_height;
     const local_index = local_row * tile.tile_width + local_col;

@@ -3,7 +3,7 @@ const tiff = @import("tiff.zig");
 const osm = @import("osm.zig");
 
 pub fn main(init: std.process.Init) !void {
-    const geo = try tiff.open("data/switzerland_dhm25.tif");
+    var geo = try tiff.open(init.gpa, "data/switzerland_dhm25.tif");
     defer geo.close();
     std.debug.print("GeoTIFF opened successfully\n", .{});
 
@@ -23,5 +23,5 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("No elevation data found at (x={d:.6}, y={d:.6})\n", .{ coords.x, coords.y });
     }
 
-    try osm.call("data/switzerland-260907.osm.pbf", "hiking");
+    try osm.call(init.gpa, geo, "data/switzerland-260907.osm.pbf", "hiking");
 }
