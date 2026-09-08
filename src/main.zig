@@ -23,5 +23,8 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("No elevation data found at (x={d:.6}, y={d:.6})\n", .{ coords.x, coords.y });
     }
 
-    try osm.call(init.gpa, geo, "data/switzerland-260907.osm.pbf", "hiking");
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer arena.deinit();
+
+    try osm.call(arena.allocator(), geo, "data/switzerland-260907.osm.pbf", "hiking");
 }
