@@ -1,5 +1,7 @@
 const std = @import("std");
+const tiff = @import("tiff.zig");
 
 pub fn main() void {
-    std.debug.print("hello world\n", .{});
+    const gtiff = tiff.open("data/elevation.tif");
+    std.debug.print("GeoTIFF opened successfully: {any}\n", .{gtiff});
 }
