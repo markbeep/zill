@@ -1,5 +1,5 @@
 .{
-    .name = .ziller,
+    .name = .zill,
     .version = "0.0.1",
     .dependencies = .{
         .libgeotiff = .{
@@ -22,8 +22,16 @@
             .url = "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
             .hash = "N-V-__8AAGVtrgCcOcmjrOJnagmnRyMrcKaOo09KbU-vu8w8",
         },
+        .protobuf = .{
+            .url = "https://github.com/Arwalk/zig-protobuf/archive/refs/tags/v5.0.0.tar.gz",
+            .hash = "protobuf-5.0.0-0e82avKUKAAVwTWJzTIEZ14Fu0zC11_lElR8tE6H__y1",
+        },
+        .readosm = .{
+            .url = "https://www.gaia-gis.it/gaia-sins/readosm-1.1.0a.tar.gz",
+            .hash = "N-V-__8AAGGuKgDaiCzBQaZ6LQdLG0S-SmRbyk8IqnL2KGXS",
+        },
     },
     .minimum_zig_version = "0.16.0",
     .paths = .{""},
-    .fingerprint = 0x19e56f35e7f242ef,
+    .fingerprint = 0xef8c6693daf96c5f,
 }

@@ -5,7 +5,7 @@ pub fn create(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
-    const proj_dep = b.dependency("proj", .{});
+    const proj_dep = b.dependency("proj", .{ .target = target, .optimize = optimize });
 
     const lib = b.addLibrary(.{
         .name = "proj",
@@ -261,7 +261,6 @@ pub fn create(
 
     lib.root_module.addIncludePath(proj_dep.path("include"));
     lib.root_module.addIncludePath(proj_dep.path("src"));
-    lib.root_module.addIncludePath(proj_dep.path("src/iso19111"));
 
     return lib;
 }

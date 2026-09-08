@@ -5,7 +5,7 @@ pub fn create(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
-    const sqlite_dep = b.dependency("sqlite", .{});
+    const sqlite_dep = b.dependency("sqlite", .{ .target = target, .optimize = optimize });
 
     const lib = b.addLibrary(.{
         .name = "sqlite3",

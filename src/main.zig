@@ -1,5 +1,6 @@
 const std = @import("std");
 const tiff = @import("tiff.zig");
+const osm = @import("osm.zig");
 
 pub fn main(init: std.process.Init) !void {
     const geo = try tiff.open("data/switzerland_dhm25.tif");
@@ -21,4 +22,6 @@ pub fn main(init: std.process.Init) !void {
     } else {
         std.debug.print("No elevation data found at (x={d:.6}, y={d:.6})\n", .{ coords.x, coords.y });
     }
+
+    try osm.call("data/switzerland-260907.osm.pbf", "hiking");
 }

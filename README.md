@@ -27,3 +27,16 @@ gdal_translate \
     /tmp/dhm25/dhm25_grid_raster.asc \
     data/switzerland_dhm25.tif
 ```
+
+## OSM Extraction
+
+https://download.geofabrik.de/europe/switzerland.html
+
+## Regenerate OSM Proto Stubs
+
+The protobuf files in `proto/` are taken from [OSM-binary](https://github.com/openstreetmap/OSM-binary). If they are updated, you can
+regenerate the Zig stubs with the following command:
+
+```sh
+zig build gen-proto
+```

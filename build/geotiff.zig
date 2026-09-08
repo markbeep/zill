@@ -7,9 +7,9 @@ pub fn create(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
-    const geotiff_dep = b.dependency("libgeotiff", .{});
-    const proj_dep = b.dependency("proj", .{});
-    const tiff_dep = b.dependency("libtiff", .{});
+    const geotiff_dep = b.dependency("libgeotiff", .{ .target = target, .optimize = optimize });
+    const proj_dep = b.dependency("proj", .{ .target = target, .optimize = optimize });
+    const tiff_dep = b.dependency("libtiff", .{ .target = target, .optimize = optimize });
 
     const lib = b.addLibrary(.{
         .name = "geotiff",
@@ -85,13 +85,9 @@ pub fn create(
     lib.root_module.addConfigHeader(gtiff_h);
     lib.root_module.addConfigHeader(geo_config_h);
     lib.root_module.addIncludePath(geotiff_dep.path(""));
-    lib.root_module.addIncludePath(geotiff_dep.path("libxtiff"));
 
     lib.installHeadersDirectory(geotiff_dep.path(""), "", .{
         .include_extensions = &.{ ".h", ".inc" },
-    });
-    lib.installHeadersDirectory(geotiff_dep.path("libxtiff"), "", .{
-        .include_extensions = &.{".h"},
     });
 
     return lib;

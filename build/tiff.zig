@@ -5,7 +5,7 @@ pub fn create(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
-    const tiff_dep = b.dependency("libtiff", .{});
+    const tiff_dep = b.dependency("libtiff", .{ .target = target, .optimize = optimize });
 
     const lib = b.addLibrary(.{
         .name = "tiff",

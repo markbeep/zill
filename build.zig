@@ -2,6 +2,7 @@ const std = @import("std");
 const build_geotiff = @import("build/geotiff.zig");
 const build_sqlite3 = @import("build/sqlite3.zig");
 const build_zlib = @import("build/zlib.zig");
+const build_readosm = @import("build/readosm.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -23,25 +24,20 @@ pub fn build(b: *std.Build) void {
     const lib_geotiff = build_geotiff.create(b, target, optimize);
     exe.root_module.linkLibrary(lib_geotiff);
 
-    // proj.h lives in the proj source tree; expose it so src/c.zig can use the
-    // PROJ C API directly for CRS reprojection.
-    const proj_dep = b.dependency("proj", .{});
-    exe.root_module.addIncludePath(proj_dep.path("src"));
-
     const lib_sqlite = build_sqlite3.create(b, target, optimize);
     exe.root_module.linkLibrary(lib_sqlite);
 
     const lib_zlib = build_zlib.create(b, target, optimize);
     exe.root_module.linkLibrary(lib_zlib);
 
-    // // proj (dep of geotiff) requires sqlite3
-    // exe.root_module.linkSystemLibrary("sqlite3", .{});
-    // exe.root_module.linkSystemLibrary("z", .{});
+    const lib_readosm = build_readosm.create(b, target, optimize);
+    exe.root_module.linkLibrary(lib_readosm);
+    exe.root_module.linkSystemLibrary("expat", .{});
 
     b.installArtifact(exe);
 
+    // run step
     const run_step = b.step("run", "Run the app");
-
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
 
