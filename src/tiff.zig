@@ -31,6 +31,8 @@ pixel_scale_y: f64,
 origin_x: f64,
 origin_y: f64,
 
+defn: c.GTIFDefn,
+
 layout: LayoutData,
 read_elevation_fn: ReadElevationFn,
 
@@ -71,6 +73,12 @@ pub fn open(path: []const u8) !GeoTiff {
     origin_x = tie_ptr[3] - (tie_ptr[0] * pixel_scale_x);
     origin_y = tie_ptr[4] - (tie_ptr[1] * pixel_scale_y);
 
+    // Determine the raster's CRS from the GeoTIFF keys so we can reproject
+    // WGS84 (EPSG:4326) input coordinates into it before sampling.
+    var defn: c.GTIFDefn = undefined;
+    if (c.GTIFGetDefn(gtif, &defn) != 1)
+        return error.GTIFGetDefnError;
+
     var layout: LayoutData = undefined;
     var read_fn: ReadElevationFn = undefined;
 
@@ -99,6 +107,7 @@ pub fn open(path: []const u8) !GeoTiff {
         .pixel_scale_y = pixel_scale_y,
         .origin_x = origin_x,
         .origin_y = origin_y,
+        .defn = defn,
         .layout = layout,
         .read_elevation_fn = read_fn,
     };
@@ -109,37 +118,20 @@ pub fn close(self: GeoTiff) void {
     c.XTIFFClose(self.tif);
 }
 
-pub inline fn readElevation(
-    self: GeoTiff,
-    allocator: std.mem.Allocator,
-    target_x: f64,
-    target_y: f64,
-) !?f32 {
+/// Reads the elevation value at the specified coordinates (target_x, target_y) GeoTIFF file.
+/// Target coordinates need to be in the same coordinate system as the GeoTIFF file. Use the `transformCoordinates` function to convert from WGS84 (EPSG:4326) if necessary.
+pub inline fn readElevation(self: GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
     return self.read_elevation_fn(self, allocator, target_x, target_y);
 }
-
-// pub fn run(self: GeoTiff, allocator: std.mem.Allocator) !void {
-//     var defn: c.GTIFDefn = undefined;
-//     if (c.GTIFGetDefn(self.gtif, &defn) != 1)
-//         return error.GTIFGetDefnError;
-
-//     std.debug.print("Model Type: {d} (1=Projected, 2=Geographic/LatLon)\n", .{defn.Model});
-//     std.debug.print("PCS Code (EPSG): {d}\n", .{defn.PCS});
-// }
 
 pub const TiledLayout = struct {
     tile_width: u32,
     tile_height: u32,
 };
 
-fn readTiledElevation(
-    self: GeoTiff,
-    allocator: std.mem.Allocator,
-    target_x: f64,
-    target_y: f64,
-) !?f32 {
+fn readTiledElevation(self: GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
     const col_f = (target_x - self.origin_x) / self.pixel_scale_x;
-    const row_f = (target_y - self.origin_y) / self.pixel_scale_y;
+    const row_f = (self.origin_y - target_y) / self.pixel_scale_y;
 
     if (col_f < 0 or row_f < 0) return null;
 
@@ -163,15 +155,47 @@ fn readTiledElevation(
     return samples[local_index];
 }
 
-fn readStripedElevation(
-    self: *GeoTiff,
-    allocator: std.mem.Allocator,
-    target_x: f64,
-    target_y: f64,
-) !?f32 {
+fn readStripedElevation(self: *GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
     _ = self;
     _ = allocator;
     _ = target_x;
     _ = target_y;
     @panic("readStripedElevation is not implemented yet");
+}
+
+pub const Coordinate = struct { x: f64, y: f64 };
+
+pub const CoordinateTransformer = struct {
+    pj: *c.PJ,
+
+    pub fn init(target_epsg: c_short) !CoordinateTransformer {
+        var buf: [64]u8 = undefined;
+        const target_def = try std.fmt.bufPrintZ(&buf, "EPSG:{d}", .{target_epsg});
+
+        const p = c.proj_create_crs_to_crs(null, "EPSG:4326", target_def.ptr, null) orelse return error.ProjCreateError;
+        defer _ = c.proj_destroy(p);
+
+        const normalized = c.proj_normalize_for_visualization(null, p) orelse return error.ProjNormalizeError;
+        return .{ .pj = normalized };
+    }
+
+    pub fn deinit(self: CoordinateTransformer) void {
+        _ = c.proj_destroy(self.pj);
+    }
+
+    pub fn transform(self: CoordinateTransformer, lon: f64, lat: f64) Coordinate {
+        var coord: c.PJ_COORD = undefined;
+        coord.xy.x = lon;
+        coord.xy.y = lat;
+
+        const res = c.proj_trans(self.pj, c.PJ_FWD, coord);
+        return .{ .x = res.xy.x, .y = res.xy.y };
+    }
+};
+
+pub fn transformCoordinates(lon: f64, lat: f64, target_epsg: c_short, target_model: c_short) !Coordinate {
+    if (target_epsg == 4326 or target_model == 2) return .{ .x = lon, .y = lat };
+    const transformer = try CoordinateTransformer.init(target_epsg);
+    defer transformer.deinit();
+    return transformer.transform(lon, lat);
 }

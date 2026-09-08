@@ -23,6 +23,11 @@ pub fn build(b: *std.Build) void {
     const lib_geotiff = build_geotiff.create(b, target, optimize);
     exe.root_module.linkLibrary(lib_geotiff);
 
+    // proj.h lives in the proj source tree; expose it so src/c.zig can use the
+    // PROJ C API directly for CRS reprojection.
+    const proj_dep = b.dependency("proj", .{});
+    exe.root_module.addIncludePath(proj_dep.path("src"));
+
     const lib_sqlite = build_sqlite3.create(b, target, optimize);
     exe.root_module.linkLibrary(lib_sqlite);
 
