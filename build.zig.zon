@@ -1,0 +1,17 @@
+.{
+    .name = .ziller,
+    .version = "0.0.1",
+    .dependencies = .{
+        .libgeotiff = .{
+            .url = "https://github.com/OSGeo/libgeotiff/releases/download/1.7.4/libgeotiff-1.7.4.tar.gz",
+            .hash = "N-V-__8AAJZ6JAAoWHdir3kaPKZ05lOiY_79AXI2zM0EpCGL",
+        },
+        .libtiff = .{
+            .url = "http://download.osgeo.org/libtiff/tiff-4.7.2.tar.gz",
+            .hash = "N-V-__8AAK3f5gBdlBoMMAjIG3gXdHJqCPe004faMPFdlV5X",
+        },
+    },
+    .minimum_zig_version = "0.16.0",
+    .paths = .{""},
+    .fingerprint = 0x19e56f35e7f242ef,
+}
