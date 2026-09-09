@@ -2,8 +2,18 @@ const std = @import("std");
 const eql = std.mem.eql;
 const tiff = @import("tiff.zig");
 const c = @import("readosm");
+const graph = @import("graph.zig");
 
-const Coordinate = packed struct { lat: f32, lon: f32, elev: f32 };
+const Coordinate = packed struct {
+    lat: f32,
+    lon: f32,
+    elev: f32,
+};
+const WayData = packed struct {
+    elev_gain: f32,
+    elev_loss: f32,
+    distance: f32,
+};
 
 const RouteFilter = struct {
     io: std.Io,
@@ -11,6 +21,7 @@ const RouteFilter = struct {
     geo: tiff.GeoTiff,
 
     nodes: std.AutoHashMap(i64, Coordinate),
+    ways: std.AutoHashMap(i64, ?WayData),
     needed_node_ids: std.AutoHashMap(i64, u32),
 
     transformer: tiff.CoordinateTransformer,
@@ -19,6 +30,7 @@ const RouteFilter = struct {
     relation_progress: std.Progress.Node,
     way_progress: std.Progress.Node,
     node_progress: std.Progress.Node,
+    way_data_progress: std.Progress.Node,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, geo: tiff.GeoTiff) !RouteFilter {
         const transformer = try tiff.CoordinateTransformer.init(geo.defn.PCS);
@@ -28,17 +40,20 @@ const RouteFilter = struct {
             .allocator = allocator,
             .geo = geo,
             .nodes = std.AutoHashMap(i64, Coordinate).init(allocator),
+            .ways = std.AutoHashMap(i64, ?WayData).init(allocator),
             .needed_node_ids = std.AutoHashMap(i64, u32).init(allocator),
             .transformer = transformer,
-            .parent_progress = std.Progress.start(io, .{ .root_name = "filtering OSM routes", .estimated_total_items = 2 }),
+            .parent_progress = std.Progress.start(io, .{ .root_name = "filtering OSM routes", .estimated_total_items = 3 }),
             .relation_progress = undefined,
             .way_progress = undefined,
+            .way_data_progress = undefined,
             .node_progress = undefined,
         };
     }
 
     pub fn deinit(self: *RouteFilter) void {
         self.nodes.deinit();
+        self.ways.deinit();
         self.transformer.deinit();
         self.needed_node_ids.deinit();
         self.parent_progress.end();
@@ -74,13 +89,20 @@ fn parseWayCallback(user_data: ?*const anyopaque, way_ptr: [*c]const c.readosm_w
     while (n < way.node_ref_count) : (n += 1) {
         const e = filter.needed_node_ids.getOrPut(way.node_refs[n]) catch return c.READOSM_ABORT;
         e.value_ptr.* = if (e.found_existing) e.value_ptr.* + 1 else 1;
-
-        if (e.value_ptr.* >= 8) {
-            std.debug.print("Node {d} is part of {d} ways\n", .{ way.node_refs[n], e.value_ptr.* });
-        }
     }
 
+    filter.ways.put(way.id, null) catch return c.READOSM_ABORT;
     filter.way_progress.completeOne();
+    return c.READOSM_OK;
+}
+
+fn parseWayElevationDistance(user_data: ?*const anyopaque, way_ptr: [*c]const c.readosm_way) callconv(.c) c_int {
+    const filter: *RouteFilter = @ptrCast(@alignCast(@constCast(user_data)));
+    const way = way_ptr.*;
+
+    if (filter.ways.get(way.id) == null) return c.READOSM_OK;
+
+    filter.way_data_progress.completeOne();
     return c.READOSM_OK;
 }
 
@@ -165,4 +187,20 @@ pub fn call(io: std.Io, allocator: std.mem.Allocator, geo: tiff.GeoTiff, path: [
             return error.ParseFailed;
         }
     }
+
+    const g = graph.DynamicGraph.init(allocator);
+    _ = g;
+
+    // get total distance elev of each way
+    // {
+    //     if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
+    //         return error.OpenFailed;
+    //     defer _ = c.readosm_close(handle);
+
+    //     filter.way_data_progress = filter.parent_progress.start("parsing way data", filter.ways.count());
+    //     defer filter.way_data_progress.end();
+    //     if (c.readosm_parse(handle, &filter, null, parseWayElevationDistance, null) != c.READOSM_OK) {
+    //         return error.ParseFailed;
+    //     }
+    // }
 }
