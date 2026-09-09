@@ -264,3 +264,13 @@ pub fn create(
 
     return lib;
 }
+
+pub fn addHeaders(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    translate_c: *std.Build.Step.TranslateC,
+) void {
+    const proj_dep = b.dependency("proj", .{ .target = target, .optimize = optimize });
+    translate_c.addIncludePath(proj_dep.path("include"));
+}

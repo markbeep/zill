@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("c.zig").c;
+const c = @import("tiff");
 
 pub const GeoTiff = @This();
 

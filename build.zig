@@ -8,12 +8,36 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const translate_tiff = b.addTranslateC(.{
+        .root_source_file = b.path("src/tiff.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    build_geotiff.addHeaders(b, target, optimize, translate_tiff);
+
+    const translate_osm = b.addTranslateC(.{
+        .root_source_file = b.path("src/osm.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    build_readosm.addHeaders(b, target, optimize, translate_osm);
+
     const exe = b.addExecutable(.{
         .name = "zill",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{
+                    .name = "tiff",
+                    .module = translate_tiff.createModule(),
+                },
+                .{
+                    .name = "readosm",
+                    .module = translate_osm.createModule(),
+                },
+            },
         }),
     });
 

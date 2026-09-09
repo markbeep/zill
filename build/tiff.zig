@@ -71,6 +71,21 @@ pub fn create(
     return lib;
 }
 
+pub fn addHeaders(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    translate_c: *std.Build.Step.TranslateC,
+) void {
+    const tiff_dep = b.dependency("libtiff", .{ .target = target, .optimize = optimize });
+
+    const write_files = b.addWriteFiles();
+    _ = write_files.add("tiffconf.h", generateTiffConf(b, target));
+
+    translate_c.addIncludePath(write_files.getDirectory());
+    translate_c.addIncludePath(tiff_dep.path("libtiff"));
+}
+
 fn generateTiffConf(b: *std.Build, target: std.Build.ResolvedTarget) []const u8 {
     const is_64_bit = target.result.ptrBitWidth() == 64;
     const is_big_endian = target.result.cpu.arch.endian() == .big;

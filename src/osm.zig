@@ -1,9 +1,6 @@
 const std = @import("std");
 const tiff = @import("tiff.zig");
-
-const c = @cImport({
-    @cInclude("readosm.h");
-});
+const c = @import("readosm");
 
 const Coordinate = packed struct { lat: f32, lon: f32, elev: f32 };
 

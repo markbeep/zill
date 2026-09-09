@@ -29,28 +29,8 @@ pub fn create(
     lib.root_module.linkLibrary(proj);
     lib.root_module.addIncludePath(proj_dep.path("include"));
 
-    const gtiff_h = b.addConfigHeader(.{
-        .style = .{ .cmake = geotiff_dep.path("geotiff.h.in") },
-        .include_path = "geotiff.h",
-    }, .{
-        .LIBGEOTIFF_MAJOR_VERSION = 1,
-        .LIBGEOTIFF_MINOR_VERSION = 7,
-        .LIBGEOTIFF_PATCH_VERSION = 4,
-        .LIBGEOTIFF_REV_VERSION = 0,
-        .LIBGEOTIFF_VERSION = 1740,
-        .LIBGEOTIFF_STRING_VERSION = "1.7.4",
-    });
-
-    const geo_config_h = b.addConfigHeader(.{
-        .style = .{ .cmake = geotiff_dep.path("cmake/geo_config.h.in") },
-        .include_path = "geo_config.h",
-    }, .{
-        .GEOTIFF_HAVE_STRINGS_H = 1,
-        .GEO_NORMALIZE_DISABLE_TOWGS84 = null,
-        .HAVE_PROJECTS_H = 0,
-        .HAVE_PROJ_H = 1,
-        .HAVE_LIBPROJ = 1,
-    });
+    const gtiff_h = makeGeotiffH(b, geotiff_dep);
+    const geo_config_h = makeGeoConfigH(b, geotiff_dep);
 
     const geotiff_c_flags = &[_][]const u8{
         "-DHAVE_TIFF=1",
@@ -91,4 +71,48 @@ pub fn create(
     });
 
     return lib;
+}
+
+pub fn addHeaders(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    translate_c: *std.Build.Step.TranslateC,
+) void {
+    const geotiff_dep = b.dependency("libgeotiff", .{ .target = target, .optimize = optimize });
+
+    translate_c.addConfigHeader(makeGeotiffH(b, geotiff_dep));
+    translate_c.addConfigHeader(makeGeoConfigH(b, geotiff_dep));
+    translate_c.addIncludePath(geotiff_dep.path(""));
+    translate_c.addIncludePath(geotiff_dep.path("libxtiff"));
+
+    build_tiff.addHeaders(b, target, optimize, translate_c);
+    build_proj.addHeaders(b, target, optimize, translate_c);
+}
+
+fn makeGeotiffH(b: *std.Build, geotiff_dep: *std.Build.Dependency) *std.Build.Step.ConfigHeader {
+    return b.addConfigHeader(.{
+        .style = .{ .cmake = geotiff_dep.path("geotiff.h.in") },
+        .include_path = "geotiff.h",
+    }, .{
+        .LIBGEOTIFF_MAJOR_VERSION = 1,
+        .LIBGEOTIFF_MINOR_VERSION = 7,
+        .LIBGEOTIFF_PATCH_VERSION = 4,
+        .LIBGEOTIFF_REV_VERSION = 0,
+        .LIBGEOTIFF_VERSION = 1740,
+        .LIBGEOTIFF_STRING_VERSION = "1.7.4",
+    });
+}
+
+fn makeGeoConfigH(b: *std.Build, geotiff_dep: *std.Build.Dependency) *std.Build.Step.ConfigHeader {
+    return b.addConfigHeader(.{
+        .style = .{ .cmake = geotiff_dep.path("cmake/geo_config.h.in") },
+        .include_path = "geo_config.h",
+    }, .{
+        .GEOTIFF_HAVE_STRINGS_H = 1,
+        .GEO_NORMALIZE_DISABLE_TOWGS84 = null,
+        .HAVE_PROJECTS_H = 0,
+        .HAVE_PROJ_H = 1,
+        .HAVE_LIBPROJ = 1,
+    });
 }
