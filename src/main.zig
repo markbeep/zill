@@ -26,5 +26,5 @@ pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
 
-    try osm.call(arena.allocator(), geo, "data/switzerland-260907.osm.pbf", "hiking");
+    try osm.call(init.io, arena.allocator(), geo, "data/switzerland-260907.osm.pbf");
 }
