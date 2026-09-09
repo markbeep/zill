@@ -4,22 +4,6 @@ const osm = @import("osm.zig");
 const graph = @import("graph.zig");
 
 pub fn main(init: std.process.Init) !void {
-    var g = graph.DynamicGraph.init(init.gpa);
-    defer g.deinit();
-    const node_idx1 = try g.addNode(1, 10.0, 20.0, 100.0);
-    const node_idx2 = try g.addNode(2, 11.0, 21.0, 200.0);
-    try g.addEdge(node_idx1, node_idx2, 50, 30, 100);
-
-    {
-        var f = try std.Io.Dir.cwd().createFile(init.io, "graph.zill", .{});
-        defer f.close(init.io);
-        var buffer: [1024]u8 = undefined;
-        var writer = f.writer(init.io, &buffer);
-        try g.exportToWriter(&writer.interface);
-    }
-
-    std.debug.print("Graph exported to graph.zill\n", .{});
-
     var geo = try tiff.open(init.gpa, "data/switzerland_dhm25.tif");
     defer geo.close();
     std.debug.print("GeoTIFF opened successfully\n", .{});
@@ -43,5 +27,30 @@ pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
 
-    try osm.call(init.io, arena.allocator(), geo, "data/switzerland-260907.osm.pbf");
+    // const progress = std.Progress.start(init.io, .{ .root_name = "filter OSM routes", .estimated_total_items = 4 });
+    // try osm.generateGraph(init.io, arena.allocator(), geo, progress, "data/switzerland-260907.osm.pbf");
+
+    var f = try std.Io.Dir.cwd().openFile(init.io, "data/graph.zill", .{ .mode = .read_only });
+    defer f.close(init.io);
+
+    var buffer: [1024]u8 = undefined;
+    var reader = f.reader(init.io, &buffer);
+    var g = try graph.DynamicGraph.fromReader(arena.allocator(), &reader.interface);
+    defer g.deinit();
+
+    std.debug.print("Graph loaded successfully with {d} nodes and {d} edges\n", .{ g.node_edges.items.len, g.edges.items.len });
+
+    var from: usize, var to: usize, var mx: u16 = .{ 0, 0, 0 };
+
+    for (g.edges.items) |e| {
+        if (e.distance > mx) {
+            mx = e.distance;
+            from = e.from;
+            to = e.to;
+        }
+    }
+
+    const from_id = g.nodes.items[from].id;
+    const to_id = g.nodes.items[to].id;
+    std.debug.print("Longest edge is from node {d} to node {d} with distance {d} meters\n", .{ from_id, to_id, mx });
 }

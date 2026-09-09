@@ -5,7 +5,6 @@ pub const Node = packed struct {
     lat: f32,
     lon: f32,
     elev: f32,
-    first_edge: u32, // Index in edges array
 };
 
 pub const Edge = packed struct {
@@ -14,7 +13,6 @@ pub const Edge = packed struct {
     elev_gain: u16,
     elev_loss: u16,
     distance: u16,
-    next_edge: u32, // Index in edges array for the next edge from the same node
 };
 
 pub const FileHeader = struct {
@@ -30,20 +28,24 @@ pub const DynamicGraph = struct {
 
     nodes: std.ArrayList(Node),
     edges: std.ArrayList(Edge),
+    node_edges: std.ArrayList(std.ArrayList(u32)), // One list of edge indices per node (parallel to nodes), so edges can be added in any order.
     osm_id_to_node_idx: std.AutoHashMap(i64, u32),
-
-    const NONE = std.math.maxInt(u32);
 
     pub fn init(allocator: std.mem.Allocator) DynamicGraph {
         return DynamicGraph{
             .allocator = allocator,
             .nodes = std.ArrayList(Node).empty,
             .edges = std.ArrayList(Edge).empty,
+            .node_edges = std.ArrayList(std.ArrayList(u32)).empty,
             .osm_id_to_node_idx = std.AutoHashMap(i64, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *DynamicGraph) void {
+        for (self.node_edges.items) |*edge_list| {
+            edge_list.deinit(self.allocator);
+        }
+        self.node_edges.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
         self.edges.deinit(self.allocator);
         self.osm_id_to_node_idx.deinit();
@@ -61,16 +63,16 @@ pub const DynamicGraph = struct {
                 .lat = lat,
                 .lon = lon,
                 .elev = elev,
-                .first_edge = NONE,
             },
         );
+        try self.node_edges.append(self.allocator, std.ArrayList(u32).empty);
         try self.osm_id_to_node_idx.put(id, idx);
         return idx;
     }
 
     pub fn addEdge(self: *DynamicGraph, from_idx: usize, to_idx: usize, elev_gain: u16, elev_loss: u16, distance: u16) !void {
         const idx: u32 = @intCast(self.edges.items.len);
-        _ = try self.edges.append(
+        try self.edges.append(
             self.allocator,
             Edge{
                 .from = from_idx,
@@ -78,32 +80,28 @@ pub const DynamicGraph = struct {
                 .elev_gain = elev_gain,
                 .elev_loss = elev_loss,
                 .distance = distance,
-                .next_edge = self.nodes.items[from_idx].first_edge,
             },
         );
-        // NOTE: flips the order of edges, so the most recently added edge is the first one in the list
-        self.nodes.items[from_idx].first_edge = idx;
+        try self.node_edges.items[from_idx].append(self.allocator, idx);
     }
 
     pub const EdgeIterator = struct {
         graph: *DynamicGraph,
-        current_idx: u32,
+        edge_indices: []const u32,
+        pos: usize = 0,
 
         pub fn next(self: *EdgeIterator) ?Edge {
-            if (self.current_idx == NONE) return null;
-            if (self.current_idx < self.graph.edges.items.len) {
-                const edge = self.graph.edges.items[self.current_idx];
-                self.current_idx = edge.next_edge;
-                return edge;
-            }
-            return null;
+            if (self.pos >= self.edge_indices.len) return null;
+            const edge = self.graph.edges.items[self.edge_indices[self.pos]];
+            self.pos += 1;
+            return edge;
         }
     };
 
     pub fn iterateOutgoingEdges(self: *DynamicGraph, from_idx: usize) EdgeIterator {
         return .{
             .graph = self,
-            .current_idx = self.nodes.items[from_idx].first_edge,
+            .edge_indices = self.node_edges.items[from_idx].items,
         };
     }
 
@@ -141,14 +139,16 @@ pub const DynamicGraph = struct {
             var node: Node = undefined;
             try reader.readSliceAll(std.mem.asBytes(&node));
             try graph.nodes.append(allocator, node);
+            try graph.node_edges.append(allocator, std.ArrayList(u32).empty);
             try graph.osm_id_to_node_idx.put(node.id, @intCast(i));
         }
 
         // Read edges
-        for (0..header.edge_count) |_| {
+        for (0..header.edge_count) |i| {
             var edge: Edge = undefined;
             try reader.readSliceAll(std.mem.asBytes(&edge));
             try graph.edges.append(allocator, edge);
+            try graph.node_edges.items[edge.from].append(allocator, @intCast(i));
         }
 
         return graph;
@@ -191,15 +191,43 @@ test "iterate" {
     while (iter.next()) |edge| : (count += 1) {
         try std.testing.expect(edge.from == node_idx0);
         if (count == 0) {
-            try std.testing.expect(edge.to == node_idx2);
-            try std.testing.expect(edge.elev_gain == 60);
-            try std.testing.expect(edge.elev_loss == 40);
-            try std.testing.expect(edge.distance == 150);
-        } else if (count == 1) {
             try std.testing.expect(edge.to == node_idx1);
             try std.testing.expect(edge.elev_gain == 50);
             try std.testing.expect(edge.elev_loss == 30);
             try std.testing.expect(edge.distance == 100);
+        } else if (count == 1) {
+            try std.testing.expect(edge.to == node_idx2);
+            try std.testing.expect(edge.elev_gain == 60);
+            try std.testing.expect(edge.elev_loss == 40);
+            try std.testing.expect(edge.distance == 150);
+        } else {
+            try std.testing.expect(false);
+        }
+    }
+    try std.testing.expect(count == 2);
+}
+
+test "add edges later" {
+    var graph = DynamicGraph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const node_idx0 = try graph.addNode(1, 10.0, 20.0, 100.0);
+    const node_idx1 = try graph.addNode(2, 11.0, 21.0, 200.0);
+    const node_idx2 = try graph.addNode(3, 12.0, 22.0, 300.0);
+
+    // Edges can be added in any order, and to any node, after the fact.
+    try graph.addEdge(node_idx1, node_idx2, 70, 50, 200);
+    try graph.addEdge(node_idx0, node_idx2, 60, 40, 150);
+    try graph.addEdge(node_idx0, node_idx1, 50, 30, 100);
+
+    var iter = graph.iterateOutgoingEdges(node_idx0);
+    var count: usize = 0;
+    while (iter.next()) |edge| : (count += 1) {
+        try std.testing.expect(edge.from == node_idx0);
+        if (count == 0) {
+            try std.testing.expect(edge.to == node_idx2);
+        } else if (count == 1) {
+            try std.testing.expect(edge.to == node_idx1);
         } else {
             try std.testing.expect(false);
         }
@@ -229,4 +257,9 @@ test "export" {
     const loaded_edge = loaded_graph.edges.items[0];
     try std.testing.expect(loaded_edge.from == node_idx1);
     try std.testing.expect(loaded_edge.to == node_idx2);
+
+    var iter = loaded_graph.iterateOutgoingEdges(node_idx1);
+    const loaded_adj_edge = iter.next().?;
+    try std.testing.expect(loaded_adj_edge.to == node_idx2);
+    try std.testing.expect(iter.next() == null);
 }

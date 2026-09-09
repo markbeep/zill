@@ -32,7 +32,14 @@ const RouteFilter = struct {
     node_progress: std.Progress.Node,
     way_data_progress: std.Progress.Node,
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator, geo: tiff.GeoTiff) !RouteFilter {
+    graph: graph.DynamicGraph,
+
+    pub fn init(
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        geo: tiff.GeoTiff,
+        progress: std.Progress.Node,
+    ) !RouteFilter {
         const transformer = try tiff.CoordinateTransformer.init(geo.defn.PCS);
 
         return RouteFilter{
@@ -43,11 +50,12 @@ const RouteFilter = struct {
             .ways = std.AutoHashMap(i64, ?WayData).init(allocator),
             .needed_node_ids = std.AutoHashMap(i64, u32).init(allocator),
             .transformer = transformer,
-            .parent_progress = std.Progress.start(io, .{ .root_name = "filtering OSM routes", .estimated_total_items = 3 }),
+            .parent_progress = progress,
             .relation_progress = undefined,
             .way_progress = undefined,
             .way_data_progress = undefined,
             .node_progress = undefined,
+            .graph = graph.DynamicGraph.init(allocator),
         };
     }
 
@@ -57,6 +65,7 @@ const RouteFilter = struct {
         self.transformer.deinit();
         self.needed_node_ids.deinit();
         self.parent_progress.end();
+        self.graph.deinit();
     }
 };
 
@@ -83,6 +92,7 @@ fn parseWayCallback(user_data: ?*const anyopaque, way_ptr: [*c]const c.readosm_w
     const filter: *RouteFilter = @ptrCast(@alignCast(@constCast(user_data)));
     const way = way_ptr.*;
 
+    if (way.node_ref_count == 0) return c.READOSM_OK;
     if (!isWalkable(way)) return c.READOSM_OK;
 
     var n: usize = 0;
@@ -100,7 +110,53 @@ fn parseWayElevationDistance(user_data: ?*const anyopaque, way_ptr: [*c]const c.
     const filter: *RouteFilter = @ptrCast(@alignCast(@constCast(user_data)));
     const way = way_ptr.*;
 
+    if (way.node_ref_count == 0) return c.READOSM_OK;
     if (filter.ways.get(way.id) == null) return c.READOSM_OK;
+
+    const NodeData = struct {
+        ref: i64,
+        coords: Coordinate,
+    };
+
+    var accum_dist: f32 = 0;
+    var accum_elev_gain: f32 = 0;
+    var accum_elev_loss: f32 = 0;
+
+    var last_node: NodeData = .{
+        .ref = way.node_refs[0],
+        .coords = filter.nodes.get(way.node_refs[0]) orelse return c.READOSM_ABORT,
+    };
+    var last_idx = filter.graph.addNode(last_node.ref, last_node.coords.lat, last_node.coords.lon, last_node.coords.elev) catch return c.READOSM_ABORT;
+
+    for (way.node_refs[1..@intCast(way.node_ref_count - 1)], 1..) |ref, i| {
+        const coords = filter.nodes.get(ref) orelse return c.READOSM_ABORT;
+        const way_count = filter.needed_node_ids.get(ref) orelse return c.READOSM_ABORT;
+
+        accum_dist += @floatCast(haversineMeters(last_node.coords, coords));
+        const elev_diff = coords.elev - last_node.coords.elev;
+        if (elev_diff > 0) {
+            accum_elev_gain += elev_diff;
+        } else {
+            accum_elev_loss += -elev_diff;
+        }
+
+        if (way_count > 1 or i == way.node_ref_count - 1) {
+            const new_idx = filter.graph.addNode(ref, coords.lat, coords.lon, coords.elev) catch return c.READOSM_ABORT;
+            filter.graph.addEdge(
+                last_idx,
+                new_idx,
+                @trunc(accum_elev_gain),
+                @trunc(accum_elev_loss),
+                @trunc(accum_dist),
+            ) catch return c.READOSM_ABORT;
+
+            last_node = NodeData{ .ref = ref, .coords = coords };
+            accum_dist = 0;
+            accum_elev_gain = 0;
+            accum_elev_loss = 0;
+            last_idx = new_idx;
+        }
+    }
 
     filter.way_data_progress.completeOne();
     return c.READOSM_OK;
@@ -155,8 +211,14 @@ fn any(v: []const u8, comptime targets: []const []const u8) bool {
     return false;
 }
 
-pub fn call(io: std.Io, allocator: std.mem.Allocator, geo: tiff.GeoTiff, path: []const u8) !void {
-    var filter = try RouteFilter.init(io, allocator, geo);
+pub fn generateGraph(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    geo: tiff.GeoTiff,
+    progress: std.Progress.Node,
+    path: []const u8,
+) !void {
+    var filter = try RouteFilter.init(io, allocator, geo, progress);
     defer filter.deinit();
     var handle: ?*const anyopaque = null;
 
@@ -188,19 +250,53 @@ pub fn call(io: std.Io, allocator: std.mem.Allocator, geo: tiff.GeoTiff, path: [
         }
     }
 
-    const g = graph.DynamicGraph.init(allocator);
-    _ = g;
-
     // get total distance elev of each way
-    // {
-    //     if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
-    //         return error.OpenFailed;
-    //     defer _ = c.readosm_close(handle);
+    {
+        if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
+            return error.OpenFailed;
+        defer _ = c.readosm_close(handle);
 
-    //     filter.way_data_progress = filter.parent_progress.start("parsing way data", filter.ways.count());
-    //     defer filter.way_data_progress.end();
-    //     if (c.readosm_parse(handle, &filter, null, parseWayElevationDistance, null) != c.READOSM_OK) {
-    //         return error.ParseFailed;
-    //     }
-    // }
+        filter.way_data_progress = filter.parent_progress.start("parsing way data", filter.ways.count());
+        defer filter.way_data_progress.end();
+        if (c.readosm_parse(handle, &filter, null, parseWayElevationDistance, null) != c.READOSM_OK) {
+            return error.ParseFailed;
+        }
+    }
+
+    {
+        var f = try std.Io.Dir.cwd().createFile(io, "data/graph.zill", .{});
+        defer f.close(io);
+        var buffer: [1024]u8 = undefined;
+        var writer = f.writer(io, &buffer);
+        try filter.graph.exportToWriter(&writer.interface);
+        std.debug.print("Graph exported to graph.zill\n", .{});
+    }
+}
+
+/// Computes great-circle distance between two coordinates in meters
+pub fn haversineMeters(p1: Coordinate, p2: Coordinate) f64 {
+    const r_earth = 6_371_000.0; // Mean Earth radius in meters
+
+    const d_lat = std.math.degreesToRadians(p2.lat - p1.lat);
+    const d_lon = std.math.degreesToRadians(p2.lon - p1.lon);
+
+    const lat1_rad = std.math.degreesToRadians(p1.lat);
+    const lat2_rad = std.math.degreesToRadians(p2.lat);
+
+    const sin_dlat_2 = @sin(d_lat / 2.0);
+    const sin_dlon_2 = @sin(d_lon / 2.0);
+
+    const a = (sin_dlat_2 * sin_dlat_2) +
+        (@cos(lat1_rad) * @cos(lat2_rad) * sin_dlon_2 * sin_dlon_2);
+
+    const _c = 2.0 * std.math.atan2(@sqrt(a), @sqrt(1.0 - a));
+
+    return r_earth * _c;
+}
+
+test "haversineMeters test" {
+    const p1 = Coordinate{ .lat = 47.44062272339814, .lon = 8.884900444931503, .elev = 0 };
+    const p2 = Coordinate{ .lat = 47.46571031478965, .lon = 8.49570105230328, .elev = 0 };
+    const distance = haversineMeters(p1, p2);
+    try std.testing.expect(@abs(distance - 29396.19) < 100.0);
 }
