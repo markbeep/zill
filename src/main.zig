@@ -1,44 +1,35 @@
 const std = @import("std");
-const tiff = @import("tiff.zig");
-const osm = @import("osm.zig");
-const graph = @import("graph.zig");
+const zill = @import("zill");
+
+fn usage() void {
+    std.debug.print("usage: zill [-i <path>]\n", .{});
+}
 
 pub fn main(init: std.process.Init) !void {
-    var geo = try tiff.open(init.gpa, "data/switzerland_dhm25.tif");
-    defer geo.close();
-    std.debug.print("GeoTIFF opened successfully\n", .{});
+    var input_path: []const u8 = "data/graph.zl";
+    var args = init.minimal.args.iterate();
+    _ = args.next();
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            usage();
+            return;
+        } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--input")) {
+            input_path = args.next() orelse return error.InvalidArguments;
+        } else {
+            usage();
+            return error.InvalidArguments;
+        }
+    }
 
     var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
 
-    {
-        const pbf_path = "data/switzerland-260907.osm.pbf";
-        const progress = std.Progress.start(init.io, .{ .root_name = "filter OSM routes", .estimated_total_items = 3 });
-        defer progress.end();
-        var node_counts = std.AutoHashMap(i64, u32).init(arena.allocator());
-        var relevant_ways = std.AutoHashMap(i64, void).init(arena.allocator());
-        try osm.findRelevantNodes(pbf_path, progress, &node_counts, &relevant_ways);
-
-        var nodes = std.AutoHashMap(i64, osm.Coordinate).init(arena.allocator());
-        try osm.extractNodeElevations(pbf_path, progress, geo, node_counts, &nodes);
-
-        var dyn_graph = graph.DynamicGraph.init(arena.allocator());
-        try osm.computeWayElevations(pbf_path, progress, nodes, node_counts, relevant_ways, &dyn_graph);
-
-        var f = try std.Io.Dir.cwd().createFile(init.io, "data/graph.zl", .{});
-        defer f.close(init.io);
-        var buffer: [1024]u8 = undefined;
-        var writer = f.writer(init.io, &buffer);
-        try dyn_graph.exportToWriter(&writer.interface);
-        std.debug.print("Graph exported to graph.zl\n", .{});
-    }
-
-    var f = try std.Io.Dir.cwd().openFile(init.io, "data/graph.zl", .{ .mode = .read_only });
+    var f = try std.Io.Dir.cwd().openFile(init.io, input_path, .{ .mode = .read_only });
     defer f.close(init.io);
 
     var buffer: [1024]u8 = undefined;
     var reader = f.reader(init.io, &buffer);
-    var g = try graph.DynamicGraph.fromReader(arena.allocator(), &reader.interface);
+    var g = try zill.DynamicGraph.fromReader(arena.allocator(), &reader.interface);
     defer g.deinit();
 
     std.debug.print("Graph loaded successfully with {d} nodes and {d} edges\n", .{ g.node_edges.items.len, g.edges.items.len });

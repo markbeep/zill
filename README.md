@@ -1,9 +1,15 @@
-## Start
+## Generating graph.zl
 
 Requires `proj.db` for now.
 
 ```sh
-PROJ_DATA="/usr/share/proj" zig build run
+PROJ_DATA="/usr/share/proj" zig build zillconv
+```
+
+## Running graph algos
+
+```sh
+zig build zill
 ```
 
 ## Elevation Map

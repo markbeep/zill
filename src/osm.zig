@@ -2,7 +2,7 @@ const std = @import("std");
 const eql = std.mem.eql;
 const tiff = @import("tiff.zig");
 const c = @import("readosm");
-const graph = @import("graph.zig");
+const graph = @import("zill");
 
 pub const Coordinate = struct {
     lat: f32,
@@ -207,41 +207,11 @@ fn parseWayElevationDistance(user_data: ?*const anyopaque, way_ptr: [*c]const c.
 // ------------
 
 fn isWalkable(comptime allow_ferry: bool, way: c.readosm_way) bool {
-    var i: usize = 0;
-    while (i < way.tag_count) : (i += 1) {
-        const key = std.mem.span(way.tags[i].key);
-        const value = std.mem.span(way.tags[i].value);
+    var walkable = false;
 
-        // https://wiki.openstreetmap.org/wiki/Key:foot
-        if (eql(u8, key, "foot")) {
-            if (any(value, &.{ "no", "private" })) {
-                return false;
-            }
-            if (any(value, &.{ "yes", "designated" })) {
-                return true;
-            }
-        }
-
-        // https://wiki.openstreetmap.org/wiki/Key:access
-        if (eql(u8, key, "access")) {
-            if (any(value, &.{ "no", "private" })) {
-                return false;
-            }
-            if (any(value, &.{ "yes", "designated" })) {
-                return true;
-            }
-        }
-
-        // https://wiki.openstreetmap.org/wiki/Key:highway
-        if (eql(u8, key, "highway")) {
-            // Default pedestrian infrastructure
-            if (any(value, &.{ "footway", "pedestrian", "path", "steps", "living_street", "track" }))
-                return true;
-
-            // Standard street grid
-            if (any(value, &.{ "residential", "service", "unclassified", "tertiary", "secondary" }))
-                return true;
-        }
+    for (way.tags[0..@intCast(way.tag_count)]) |tag| {
+        const key = std.mem.span(tag.key);
+        const value = std.mem.span(tag.value);
 
         if (!allow_ferry) {
             if (eql(u8, key, "ferry") and eql(u8, value, "yes")) {
@@ -254,8 +224,46 @@ fn isWalkable(comptime allow_ferry: bool, way: c.readosm_way) bool {
                 return false;
             }
         }
+
+        // https://wiki.openstreetmap.org/wiki/Key:foot
+        if (eql(u8, key, "foot")) {
+            if (any(value, &.{ "no", "private" })) {
+                return false;
+            }
+            if (any(value, &.{ "yes", "designated" })) {
+                walkable = true;
+                continue;
+            }
+        }
+
+        // https://wiki.openstreetmap.org/wiki/Key:access
+        if (eql(u8, key, "access")) {
+            if (any(value, &.{ "no", "private" })) {
+                return false;
+            }
+            if (any(value, &.{ "yes", "designated" })) {
+                walkable = true;
+                continue;
+            }
+        }
+
+        // https://wiki.openstreetmap.org/wiki/Key:highway
+        if (eql(u8, key, "highway")) {
+            // Default pedestrian infrastructure
+            if (any(value, &.{ "footway", "pedestrian", "path", "steps", "living_street", "track" })) {
+                walkable = true;
+                continue;
+            }
+
+            // Standard street grid
+            if (any(value, &.{ "residential", "service", "unclassified", "tertiary", "secondary" })) {
+                walkable = true;
+                continue;
+            }
+        }
     }
-    return false;
+
+    return walkable;
 }
 
 fn any(v: []const u8, comptime targets: []const []const u8) bool {
