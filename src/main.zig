@@ -48,8 +48,8 @@ pub fn main(init: std.process.Init) !void {
     for (g.edges.items) |e| {
         if (e.distance > mx) {
             mx = e.distance;
-            from = e.from;
-            to = e.to;
+            from = e.u_idx;
+            to = e.v_idx;
         }
     }
 

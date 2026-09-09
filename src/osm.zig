@@ -250,6 +250,9 @@ fn isWalkable(comptime allow_ferry: bool, way: c.readosm_way) bool {
             if (eql(u8, key, "amenity") and eql(u8, value, "ferry_terminal")) {
                 return false;
             }
+            if (eql(u8, key, "route") and eql(u8, value, "ferry")) {
+                return false;
+            }
         }
     }
     return false;
