@@ -1,10 +1,10 @@
 const std = @import("std");
 
-pub const Node = packed struct {
+pub const Node = struct {
     id: i64,
     lat: f32,
     lon: f32,
-    elev: f32,
+    elev: ?f32,
 };
 
 pub const Edge = packed struct {
@@ -12,7 +12,7 @@ pub const Edge = packed struct {
     to: usize, // Index in nodes array
     elev_gain: u16,
     elev_loss: u16,
-    distance: u16,
+    distance: u32,
 };
 
 pub const FileHeader = struct {
@@ -51,7 +51,7 @@ pub const DynamicGraph = struct {
         self.osm_id_to_node_idx.deinit();
     }
 
-    pub fn addNode(self: *DynamicGraph, id: i64, lat: f32, lon: f32, elev: f32) !u32 {
+    pub fn addNode(self: *DynamicGraph, id: i64, lat: f32, lon: f32, elev: ?f32) !u32 {
         if (self.osm_id_to_node_idx.get(id)) |existing_idx| {
             return existing_idx;
         }
@@ -70,7 +70,7 @@ pub const DynamicGraph = struct {
         return idx;
     }
 
-    pub fn addEdge(self: *DynamicGraph, from_idx: usize, to_idx: usize, elev_gain: u16, elev_loss: u16, distance: u16) !void {
+    pub fn addEdge(self: *DynamicGraph, from_idx: usize, to_idx: usize, elev_gain: u16, elev_loss: u16, distance: u32) !void {
         const idx: u32 = @intCast(self.edges.items.len);
         try self.edges.append(
             self.allocator,

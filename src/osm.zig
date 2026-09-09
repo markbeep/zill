@@ -4,145 +4,188 @@ const tiff = @import("tiff.zig");
 const c = @import("readosm");
 const graph = @import("graph.zig");
 
-const Coordinate = packed struct {
+pub const Coordinate = struct {
     lat: f32,
     lon: f32,
-    elev: f32,
-};
-const WayData = packed struct {
-    elev_gain: f32,
-    elev_loss: f32,
-    distance: f32,
+    elev: ?f32,
 };
 
-const RouteFilter = struct {
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    geo: tiff.GeoTiff,
+// ------------
 
-    nodes: std.AutoHashMap(i64, Coordinate),
-    ways: std.AutoHashMap(i64, ?WayData),
-    needed_node_ids: std.AutoHashMap(i64, u32),
+const WayFinderData = struct {
+    progress: std.Progress.Node = undefined,
+    node_counts: *std.AutoHashMap(i64, u32),
+    ways: *std.AutoHashMap(i64, void),
+};
 
+pub fn findRelevantNodes(
+    path: []const u8,
+    progress: std.Progress.Node,
+    node_counts: *std.AutoHashMap(i64, u32),
+    relevant_ways: *std.AutoHashMap(i64, void),
+) !void {
+    var data = WayFinderData{
+        .progress = progress.start("parsing ways", 0),
+        .node_counts = node_counts,
+        .ways = relevant_ways,
+    };
+    defer data.progress.end();
+
+    var handle: ?*const anyopaque = null;
+    if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
+        return error.OpenFailed;
+    defer _ = c.readosm_close(handle);
+
+    if (c.readosm_parse(handle, &data, null, parseWayCallback, null) != c.READOSM_OK) {
+        return error.ParseFailed;
+    }
+}
+
+fn parseWayCallback(user_data: ?*const anyopaque, way_ptr: [*c]const c.readosm_way) callconv(.c) c_int {
+    const relevant: *WayFinderData = @ptrCast(@alignCast(@constCast(user_data)));
+    const way = way_ptr.*;
+
+    if (!isWalkable(false, way)) return c.READOSM_OK;
+
+    var n: usize = 0;
+    while (n < way.node_ref_count) : (n += 1) {
+        const e = relevant.node_counts.getOrPut(way.node_refs[n]) catch return c.READOSM_ABORT;
+        e.value_ptr.* = if (e.found_existing) e.value_ptr.* + 1 else 1;
+    }
+
+    relevant.ways.put(way.id, {}) catch return c.READOSM_ABORT;
+    relevant.progress.completeOne();
+    return c.READOSM_OK;
+}
+
+// ------------
+
+const NodeData = struct {
+    progress: std.Progress.Node = undefined,
     transformer: tiff.CoordinateTransformer,
-
-    parent_progress: std.Progress.Node,
-    relation_progress: std.Progress.Node,
-    way_progress: std.Progress.Node,
-    node_progress: std.Progress.Node,
-    way_data_progress: std.Progress.Node,
-
-    graph: graph.DynamicGraph,
-
-    pub fn init(
-        io: std.Io,
-        allocator: std.mem.Allocator,
-        geo: tiff.GeoTiff,
-        progress: std.Progress.Node,
-    ) !RouteFilter {
-        const transformer = try tiff.CoordinateTransformer.init(geo.defn.PCS);
-
-        return RouteFilter{
-            .io = io,
-            .allocator = allocator,
-            .geo = geo,
-            .nodes = std.AutoHashMap(i64, Coordinate).init(allocator),
-            .ways = std.AutoHashMap(i64, ?WayData).init(allocator),
-            .needed_node_ids = std.AutoHashMap(i64, u32).init(allocator),
-            .transformer = transformer,
-            .parent_progress = progress,
-            .relation_progress = undefined,
-            .way_progress = undefined,
-            .way_data_progress = undefined,
-            .node_progress = undefined,
-            .graph = graph.DynamicGraph.init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *RouteFilter) void {
-        self.nodes.deinit();
-        self.ways.deinit();
-        self.transformer.deinit();
-        self.needed_node_ids.deinit();
-        self.parent_progress.end();
-        self.graph.deinit();
-    }
+    geo: tiff.GeoTiff,
+    node_counts: std.AutoHashMap(i64, u32),
+    nodes: *std.AutoHashMap(i64, Coordinate),
 };
+
+pub fn extractNodeElevations(
+    path: []const u8,
+    progress: std.Progress.Node,
+    geo: tiff.GeoTiff,
+    node_counts: std.AutoHashMap(i64, u32),
+    nodes: *std.AutoHashMap(i64, Coordinate),
+) !void {
+    var elevs = NodeData{
+        .progress = progress.start("parsing nodes", node_counts.count()),
+        .transformer = try tiff.CoordinateTransformer.init(geo.defn.PCS),
+        .geo = geo,
+        .node_counts = node_counts,
+        .nodes = nodes,
+    };
+    defer elevs.transformer.deinit();
+    defer elevs.progress.end();
+
+    var handle: ?*const anyopaque = null;
+    if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
+        return error.OpenFailed;
+    defer _ = c.readosm_close(handle);
+
+    if (c.readosm_parse(handle, &elevs, parseNodeCallback, null, null) != c.READOSM_OK) {
+        return error.ParseFailed;
+    }
+}
 
 fn parseNodeCallback(user_data: ?*const anyopaque, node_ptr: [*c]const c.readosm_node) callconv(.c) c_int {
-    const filter: *RouteFilter = @ptrCast(@alignCast(@constCast(user_data)));
+    const data: *NodeData = @ptrCast(@alignCast(@constCast(user_data)));
     const node = node_ptr.*;
 
-    if (filter.needed_node_ids.get(node.id) == null) return c.READOSM_OK;
+    if (data.node_counts.get(node.id) == null) return c.READOSM_OK;
 
-    const coords = filter.transformer.transform(node.longitude, node.latitude);
-    const elev = (filter.geo.readElevation(filter.allocator, coords.x, coords.y) catch return c.READOSM_ABORT) orelse return c.READOSM_OK;
+    const coords = data.transformer.transform(node.longitude, node.latitude);
+    const elev = data.geo.readElevation(coords.x, coords.y) catch return c.READOSM_ABORT;
 
-    filter.nodes.put(node.id, .{
+    data.nodes.put(node.id, .{
         .lat = @floatCast(node.latitude),
         .lon = @floatCast(node.longitude),
         .elev = elev,
     }) catch return c.READOSM_ABORT;
 
-    filter.node_progress.completeOne();
+    data.progress.completeOne();
     return c.READOSM_OK;
 }
 
-fn parseWayCallback(user_data: ?*const anyopaque, way_ptr: [*c]const c.readosm_way) callconv(.c) c_int {
-    const filter: *RouteFilter = @ptrCast(@alignCast(@constCast(user_data)));
-    const way = way_ptr.*;
+// ------------
 
-    if (way.node_ref_count == 0) return c.READOSM_OK;
-    if (!isWalkable(way)) return c.READOSM_OK;
+const WayComputeData = struct {
+    progress: std.Progress.Node = undefined,
+    nodes: std.AutoHashMap(i64, Coordinate),
+    node_counts: std.AutoHashMap(i64, u32),
+    visited_ways: std.AutoHashMap(i64, void),
+    graph: *graph.DynamicGraph,
+};
 
-    var n: usize = 0;
-    while (n < way.node_ref_count) : (n += 1) {
-        const e = filter.needed_node_ids.getOrPut(way.node_refs[n]) catch return c.READOSM_ABORT;
-        e.value_ptr.* = if (e.found_existing) e.value_ptr.* + 1 else 1;
+pub fn computeWayElevations(
+    path: []const u8,
+    progress: std.Progress.Node,
+    nodes: std.AutoHashMap(i64, Coordinate),
+    node_counts: std.AutoHashMap(i64, u32),
+    visited_ways: std.AutoHashMap(i64, void),
+    g: *graph.DynamicGraph,
+) !void {
+    var data = WayComputeData{
+        .progress = progress.start("parsing way data", visited_ways.count()),
+        .nodes = nodes,
+        .node_counts = node_counts,
+        .visited_ways = visited_ways,
+        .graph = g,
+    };
+    defer data.progress.end();
+
+    var handle: ?*const anyopaque = null;
+    if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
+        return error.OpenFailed;
+    defer _ = c.readosm_close(handle);
+
+    if (c.readosm_parse(handle, &data, null, parseWayElevationDistance, null) != c.READOSM_OK) {
+        return error.ParseFailed;
     }
-
-    filter.ways.put(way.id, null) catch return c.READOSM_ABORT;
-    filter.way_progress.completeOne();
-    return c.READOSM_OK;
 }
 
 fn parseWayElevationDistance(user_data: ?*const anyopaque, way_ptr: [*c]const c.readosm_way) callconv(.c) c_int {
-    const filter: *RouteFilter = @ptrCast(@alignCast(@constCast(user_data)));
+    const elevs: *WayComputeData = @ptrCast(@alignCast(@constCast(user_data)));
     const way = way_ptr.*;
-
-    if (way.node_ref_count == 0) return c.READOSM_OK;
-    if (filter.ways.get(way.id) == null) return c.READOSM_OK;
-
-    const NodeData = struct {
-        ref: i64,
-        coords: Coordinate,
-    };
+    if (elevs.visited_ways.get(way.id) == null) return c.READOSM_OK;
 
     var accum_dist: f32 = 0;
     var accum_elev_gain: f32 = 0;
     var accum_elev_loss: f32 = 0;
 
-    var last_node: NodeData = .{
+    var last_node = .{
         .ref = way.node_refs[0],
-        .coords = filter.nodes.get(way.node_refs[0]) orelse return c.READOSM_ABORT,
+        .coords = elevs.nodes.get(way.node_refs[0]) orelse return c.READOSM_ABORT,
     };
-    var last_idx = filter.graph.addNode(last_node.ref, last_node.coords.lat, last_node.coords.lon, last_node.coords.elev) catch return c.READOSM_ABORT;
 
-    for (way.node_refs[1..@intCast(way.node_ref_count - 1)], 1..) |ref, i| {
-        const coords = filter.nodes.get(ref) orelse return c.READOSM_ABORT;
-        const way_count = filter.needed_node_ids.get(ref) orelse return c.READOSM_ABORT;
+    var last_idx = elevs.graph.addNode(last_node.ref, last_node.coords.lat, last_node.coords.lon, last_node.coords.elev) catch return c.READOSM_ABORT;
+
+    for (way.node_refs[1..@intCast(way.node_ref_count)], 1..) |ref, i| {
+        const way_count = elevs.node_counts.get(ref) orelse return c.READOSM_ABORT;
+        const coords = elevs.nodes.get(ref) orelse return c.READOSM_ABORT;
 
         accum_dist += @floatCast(haversineMeters(last_node.coords, coords));
-        const elev_diff = coords.elev - last_node.coords.elev;
-        if (elev_diff > 0) {
-            accum_elev_gain += elev_diff;
-        } else {
-            accum_elev_loss += -elev_diff;
+        if (coords.elev != null and last_node.coords.elev != null) {
+            // NOTE: if no elev data is present, we simply ignore it. Mostly means that ways going outside of the GeoTIFF bounds will be missing some elevation data
+            const elev_diff = coords.elev.? - last_node.coords.elev.?;
+            if (elev_diff > 0) {
+                accum_elev_gain += elev_diff;
+            } else {
+                accum_elev_loss += -elev_diff;
+            }
         }
+        last_node = .{ .ref = ref, .coords = coords };
 
         if (way_count > 1 or i == way.node_ref_count - 1) {
-            const new_idx = filter.graph.addNode(ref, coords.lat, coords.lon, coords.elev) catch return c.READOSM_ABORT;
-            filter.graph.addEdge(
+            const new_idx = elevs.graph.addNode(ref, coords.lat, coords.lon, coords.elev) catch return c.READOSM_ABORT;
+            elevs.graph.addEdge(
                 last_idx,
                 new_idx,
                 @trunc(accum_elev_gain),
@@ -150,7 +193,6 @@ fn parseWayElevationDistance(user_data: ?*const anyopaque, way_ptr: [*c]const c.
                 @trunc(accum_dist),
             ) catch return c.READOSM_ABORT;
 
-            last_node = NodeData{ .ref = ref, .coords = coords };
             accum_dist = 0;
             accum_elev_gain = 0;
             accum_elev_loss = 0;
@@ -158,11 +200,13 @@ fn parseWayElevationDistance(user_data: ?*const anyopaque, way_ptr: [*c]const c.
         }
     }
 
-    filter.way_data_progress.completeOne();
+    elevs.progress.completeOne();
     return c.READOSM_OK;
 }
 
-fn isWalkable(way: c.readosm_way) bool {
+// ------------
+
+fn isWalkable(comptime allow_ferry: bool, way: c.readosm_way) bool {
     var i: usize = 0;
     while (i < way.tag_count) : (i += 1) {
         const key = std.mem.span(way.tags[i].key);
@@ -198,6 +242,15 @@ fn isWalkable(way: c.readosm_way) bool {
             if (any(value, &.{ "residential", "service", "unclassified", "tertiary", "secondary" }))
                 return true;
         }
+
+        if (!allow_ferry) {
+            if (eql(u8, key, "ferry") and eql(u8, value, "yes")) {
+                return false;
+            }
+            if (eql(u8, key, "amenity") and eql(u8, value, "ferry_terminal")) {
+                return false;
+            }
+        }
     }
     return false;
 }
@@ -209,68 +262,6 @@ fn any(v: []const u8, comptime targets: []const []const u8) bool {
         }
     }
     return false;
-}
-
-pub fn generateGraph(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    geo: tiff.GeoTiff,
-    progress: std.Progress.Node,
-    path: []const u8,
-) !void {
-    var filter = try RouteFilter.init(io, allocator, geo, progress);
-    defer filter.deinit();
-    var handle: ?*const anyopaque = null;
-
-    // find all relevant ways and node ids
-    {
-        if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
-            return error.OpenFailed;
-        defer _ = c.readosm_close(handle);
-
-        filter.way_progress = filter.parent_progress.start("parsing ways", 0);
-        defer filter.way_progress.end();
-        if (c.readosm_parse(handle, &filter, null, parseWayCallback, null) != c.READOSM_OK) {
-            return error.ParseFailed;
-        }
-    }
-
-    @import("plot.zig").printWayDegreeDistribution(filter.needed_node_ids);
-
-    // find all relevant nodes and elevations
-    {
-        if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
-            return error.OpenFailed;
-        defer _ = c.readosm_close(handle);
-
-        filter.node_progress = filter.parent_progress.start("parsing nodes", filter.needed_node_ids.count());
-        defer filter.node_progress.end();
-        if (c.readosm_parse(handle, &filter, parseNodeCallback, null, null) != c.READOSM_OK) {
-            return error.ParseFailed;
-        }
-    }
-
-    // get total distance elev of each way
-    {
-        if (c.readosm_open(path.ptr, &handle) != c.READOSM_OK)
-            return error.OpenFailed;
-        defer _ = c.readosm_close(handle);
-
-        filter.way_data_progress = filter.parent_progress.start("parsing way data", filter.ways.count());
-        defer filter.way_data_progress.end();
-        if (c.readosm_parse(handle, &filter, null, parseWayElevationDistance, null) != c.READOSM_OK) {
-            return error.ParseFailed;
-        }
-    }
-
-    {
-        var f = try std.Io.Dir.cwd().createFile(io, "data/graph.zill", .{});
-        defer f.close(io);
-        var buffer: [1024]u8 = undefined;
-        var writer = f.writer(io, &buffer);
-        try filter.graph.exportToWriter(&writer.interface);
-        std.debug.print("Graph exported to graph.zill\n", .{});
-    }
 }
 
 /// Computes great-circle distance between two coordinates in meters

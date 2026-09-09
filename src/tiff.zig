@@ -5,7 +5,6 @@ pub const GeoTiff = @This();
 
 pub const ReadElevationFn = *const fn (
     self: *GeoTiff,
-    allocator: std.mem.Allocator,
     target_x: f64,
     target_y: f64,
 ) anyerror!?f32;
@@ -136,8 +135,8 @@ pub fn close(self: GeoTiff) void {
 
 /// Reads the elevation value at the specified coordinates (target_x, target_y) GeoTIFF file.
 /// Target coordinates need to be in the same coordinate system as the GeoTIFF file. Use the `transformCoordinates` function to convert from WGS84 (EPSG:4326) if necessary.
-pub inline fn readElevation(self: *GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
-    return self.read_elevation_fn(self, allocator, target_x, target_y);
+pub inline fn readElevation(self: *GeoTiff, target_x: f64, target_y: f64) !?f32 {
+    return self.read_elevation_fn(self, target_x, target_y);
 }
 
 pub const TiledLayout = struct {
@@ -145,9 +144,7 @@ pub const TiledLayout = struct {
     tile_height: u32,
 };
 
-fn readTiledElevation(self: *GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
-    _ = allocator;
-
+fn readTiledElevation(self: *GeoTiff, target_x: f64, target_y: f64) !?f32 {
     const col_f = (target_x - self.origin_x) / self.pixel_scale_x;
     const row_f = (self.origin_y - target_y) / self.pixel_scale_y;
 
@@ -174,12 +171,13 @@ fn readTiledElevation(self: *GeoTiff, allocator: std.mem.Allocator, target_x: f6
     const local_col = col % tile.tile_width;
     const local_row = row % tile.tile_height;
     const local_index = local_row * tile.tile_width + local_col;
-    return samples[local_index];
+    const elev = samples[local_index];
+    if (elev < -1000.0) return null;
+    return elev;
 }
 
-fn readStripedElevation(self: *GeoTiff, allocator: std.mem.Allocator, target_x: f64, target_y: f64) !?f32 {
+fn readStripedElevation(self: *GeoTiff, target_x: f64, target_y: f64) !?f32 {
     _ = self;
-    _ = allocator;
     _ = target_x;
     _ = target_y;
     @panic("readStripedElevation is not implemented yet");
