@@ -183,7 +183,8 @@ fn parseWayElevationDistance(user_data: ?*const anyopaque, way_ptr: [*c]const c.
         }
         last_node = .{ .ref = ref, .coords = coords };
 
-        if (way_count > 1 or i == way.node_ref_count - 1) {
+        // chunk the way into segments if its over 100m
+        if (way_count > 1 or i == way.node_ref_count - 1 or accum_dist > 100.0) {
             const new_idx = elevs.graph.addNode(ref, coords.lat, coords.lon, coords.elev) catch return c.READOSM_ABORT;
             elevs.graph.addEdge(
                 last_idx,

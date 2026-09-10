@@ -146,6 +146,20 @@ pub const DynamicGraph = struct {
             try graph.node_edges.items[edge.u_idx].append(allocator, @intCast(i));
         }
 
+        // Edges the other way
+        for (0..header.edge_count) |i| {
+            const edge = graph.edges.items[i];
+            const flipped = s.Edge{
+                .u_idx = edge.v_idx,
+                .v_idx = edge.u_idx,
+                .elev_gain = edge.elev_loss,
+                .elev_loss = edge.elev_gain,
+                .distance = edge.distance,
+            };
+            try graph.edges.append(allocator, flipped);
+            try graph.node_edges.items[flipped.u_idx].append(allocator, @intCast(i + header.edge_count));
+        }
+
         return graph;
     }
 };

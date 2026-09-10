@@ -241,5 +241,5 @@ pub fn writeGpx(io: std.Io, path: []const u8, name: []const u8, nodes: []const s
     try out.print("</trkseg>\n</trk>\n</gpx>\n", .{});
     try out.flush();
 
-    std.debug.print("wrote {s}\n", .{path});
+    std.debug.print("wrote {s} with elev {d}m, dist {d}m, {d} pts\n", .{ path, c.elevation, c.distance, c.path.len });
 }
