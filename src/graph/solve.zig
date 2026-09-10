@@ -8,9 +8,11 @@ pub const Coord = struct {
 
 pub fn findMax(
     allocator: std.mem.Allocator,
+    io: std.Io,
     progress: std.Progress.Node,
     from: Coord,
-    max_dist_away_m: f64,
+    max_radius_m: f64,
+    max_distance_m: i64,
     nodes: []const s.Node,
     edges: []const s.Edge,
     outgoing: []std.ArrayList(u32),
@@ -23,7 +25,7 @@ pub fn findMax(
         defer close_progress.end();
         for (nodes, 0..) |n, i| {
             const dist = haversineMeters(from, .{ .lat = n.lat, .lon = n.lon });
-            if (dist <= max_dist_away_m) {
+            if (dist <= max_radius_m) {
                 try close.append(allocator, @intCast(i));
             }
             close_progress.completeOne();
@@ -33,10 +35,17 @@ pub fn findMax(
     {
         const search_progress = progress.start("searching from close nodes", close.items.len);
         defer search_progress.end();
-        for (close.items) |c| {
-            std.debug.print("Searching from node {d}\n", .{c});
-            try dijkstra(allocator, c, 10_000, nodes, edges, outgoing);
+
+        const DijkstraResult = @typeInfo(@TypeOf(dijkstra)).@"fn".return_type.?;
+
+        var futures = try allocator.alloc(std.Io.Future(DijkstraResult), close.items.len);
+        defer allocator.free(futures);
+        for (close.items, 0..) |c, i| {
+            futures[i] = io.async(dijkstra, .{ allocator, c, max_distance_m, nodes, edges, outgoing });
             search_progress.completeOne();
+        }
+        for (futures) |*f| {
+            try f.await(io);
         }
     }
 }
@@ -71,12 +80,13 @@ fn dijkstra(
     const MaxState = struct {
         distance: i64,
         elevation: i32,
+        prev: ?u32,
     };
     var visited = try allocator.alloc(?MaxState, nodes.len);
     @memset(visited, null);
     defer allocator.free(visited);
 
-    visited[start] = MaxState{ .distance = 0, .elevation = 0 };
+    visited[start] = MaxState{ .distance = 0, .elevation = 0, .prev = null };
 
     while (pq.pop()) |current| {
         const cur_count = visited[current] orelse continue;
@@ -85,6 +95,7 @@ fn dijkstra(
             const out_count = visited[edge.v_idx];
 
             const new_distance = cur_count.distance + edge.distance;
+            if (new_distance == 0) continue;
             if (new_distance > max_distance) continue;
 
             const new_elevation = cur_count.elevation + edge.elev_gain - edge.elev_loss;
@@ -96,6 +107,7 @@ fn dijkstra(
                     visited[edge.v_idx] = .{
                         .distance = new_distance,
                         .elevation = new_elevation,
+                        .prev = current,
                     };
                     try pq.push(allocator, edge.v_idx);
                 }
@@ -103,15 +115,10 @@ fn dijkstra(
                 visited[edge.v_idx] = .{
                     .distance = new_distance,
                     .elevation = new_elevation,
+                    .prev = current,
                 };
                 try pq.push(allocator, edge.v_idx);
             }
-        }
-    }
-
-    for (visited, 0..) |v, i| {
-        if (v) |state| {
-            std.debug.print("Node {d}: distance = {d}, elevation = {d}\n", .{ i, state.distance, state.elevation });
         }
     }
 }
