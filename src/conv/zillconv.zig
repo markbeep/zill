@@ -38,3 +38,7 @@ pub fn generate(gpa: std.mem.Allocator, io: std.Io, options: Options) !void {
         std.debug.print("Graph exported to {s}\n", .{options.output_path});
     }
 }
+
+test {
+    std.testing.refAllDecls(@This());
+}

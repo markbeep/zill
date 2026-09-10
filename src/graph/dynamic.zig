@@ -1,49 +1,19 @@
 const std = @import("std");
-
-pub const PackedNode = packed struct {
-    const INVALID_ELEV: u16 = 0xFFFF;
-    id: i64,
-    lat: f32,
-    lon: f32,
-    elev: u16,
-};
-
-pub const Node = struct {
-    id: i64,
-    lat: f32,
-    lon: f32,
-    elev: ?u16,
-};
-
-pub const Edge = packed struct {
-    u_idx: u32, // Index in nodes array
-    v_idx: u32, // Index in nodes array
-    elev_gain: u16,
-    elev_loss: u16,
-    distance: u32,
-};
-
-pub const FileHeader = struct {
-    const MAGIC = [8]u8{ 'Z', 'I', 'L', 'L', 0, 0, 0, 0 };
-
-    magic: [8]u8 = MAGIC,
-    node_count: usize,
-    edge_count: usize,
-};
+const s = @import("shared.zig");
 
 pub const DynamicGraph = struct {
     allocator: std.mem.Allocator,
 
-    nodes: std.ArrayList(Node),
-    edges: std.ArrayList(Edge),
-    node_edges: std.ArrayList(std.ArrayList(u32)), // One list of edge indices per node (parallel to nodes), so edges can be added in any order.
+    nodes: std.ArrayList(s.Node),
+    edges: std.ArrayList(s.Edge),
+    node_edges: std.ArrayList(std.ArrayList(u32)),
     osm_id_to_node_idx: std.AutoHashMap(i64, u32),
 
     pub fn init(allocator: std.mem.Allocator) DynamicGraph {
         return DynamicGraph{
             .allocator = allocator,
-            .nodes = std.ArrayList(Node).empty,
-            .edges = std.ArrayList(Edge).empty,
+            .nodes = std.ArrayList(s.Node).empty,
+            .edges = std.ArrayList(s.Edge).empty,
             .node_edges = std.ArrayList(std.ArrayList(u32)).empty,
             .osm_id_to_node_idx = std.AutoHashMap(i64, u32).init(allocator),
         };
@@ -66,7 +36,7 @@ pub const DynamicGraph = struct {
         const idx: u32 = @intCast(self.nodes.items.len);
         try self.nodes.append(
             self.allocator,
-            Node{
+            s.Node{
                 .id = id,
                 .lat = lat,
                 .lon = lon,
@@ -82,7 +52,7 @@ pub const DynamicGraph = struct {
         const idx: u32 = @intCast(self.edges.items.len);
         try self.edges.append(
             self.allocator,
-            Edge{
+            s.Edge{
                 .u_idx = u_idx,
                 .v_idx = v_idx,
                 .elev_gain = elev_gain,
@@ -98,7 +68,7 @@ pub const DynamicGraph = struct {
         edge_indices: []const u32,
         pos: usize = 0,
 
-        pub fn next(self: *EdgeIterator) ?Edge {
+        pub fn next(self: *EdgeIterator) ?s.Edge {
             if (self.pos >= self.edge_indices.len) return null;
             const edge = self.graph.edges.items[self.edge_indices[self.pos]];
             self.pos += 1;
@@ -115,7 +85,7 @@ pub const DynamicGraph = struct {
 
     pub fn exportToWriter(self: *DynamicGraph, writer: *std.Io.Writer) !void {
         // Header
-        const header = FileHeader{
+        const header = s.FileHeader{
             .node_count = self.nodes.items.len,
             .edge_count = self.edges.items.len,
         };
@@ -123,11 +93,11 @@ pub const DynamicGraph = struct {
 
         // Nodes
         for (self.nodes.items) |n| {
-            const packed_node = PackedNode{
+            const packed_node = s.PackedNode{
                 .id = n.id,
                 .lat = n.lat,
                 .lon = n.lon,
-                .elev = if (n.elev) |e| e else PackedNode.INVALID_ELEV,
+                .elev = if (n.elev) |e| e else s.PackedNode.INVALID_ELEV,
             };
             try writer.writeAll(std.mem.asBytes(&packed_node));
         }
@@ -142,21 +112,26 @@ pub const DynamicGraph = struct {
         var graph = DynamicGraph.init(allocator);
 
         // Read header
-        var header: FileHeader = undefined;
+        var header: s.FileHeader = undefined;
         try reader.readSliceAll(std.mem.asBytes(&header));
-        if (!std.mem.eql(u8, &header.magic, &FileHeader.MAGIC)) {
+        if (!std.mem.eql(u8, &header.magic, &s.FileHeader.MAGIC)) {
             return error.InvalidFileFormat;
+        }
+
+        if (!s.validVersion(header.version)) {
+            std.debug.print("Unsupported version: {d}.{d}.{d}\n", .{ header.version[0], header.version[1], header.version[2] });
+            return error.UnsupportedVersion;
         }
 
         // Read nodes
         for (0..header.node_count) |i| {
-            var packed_node: PackedNode = undefined;
+            var packed_node: s.PackedNode = undefined;
             try reader.readSliceAll(std.mem.asBytes(&packed_node));
-            const node = Node{
+            const node = s.Node{
                 .id = packed_node.id,
                 .lat = packed_node.lat,
                 .lon = packed_node.lon,
-                .elev = if (packed_node.elev == PackedNode.INVALID_ELEV) null else @intCast(packed_node.elev),
+                .elev = if (packed_node.elev == s.PackedNode.INVALID_ELEV) null else @intCast(packed_node.elev),
             };
             try graph.nodes.append(allocator, node);
             try graph.node_edges.append(allocator, std.ArrayList(u32).empty);
@@ -165,7 +140,7 @@ pub const DynamicGraph = struct {
 
         // Read edges
         for (0..header.edge_count) |i| {
-            var edge: Edge = undefined;
+            var edge: s.Edge = undefined;
             try reader.readSliceAll(std.mem.asBytes(&edge));
             try graph.edges.append(allocator, edge);
             try graph.node_edges.items[edge.u_idx].append(allocator, @intCast(i));
@@ -176,17 +151,17 @@ pub const DynamicGraph = struct {
 };
 
 test "basic graph" {
-    var graph = DynamicGraph.init(std.testing.allocator);
-    defer graph.deinit();
+    var dyn = DynamicGraph.init(std.testing.allocator);
+    defer dyn.deinit();
 
-    const node_idx1 = try graph.addNode(1, 10.0, 20.0, 100.0);
-    const node_idx2 = try graph.addNode(2, 11.0, 21.0, 200.0);
-    try graph.addEdge(node_idx1, node_idx2, 50, 30, 100);
+    const node_idx1 = try dyn.addNode(1, 10.0, 20.0, 100.0);
+    const node_idx2 = try dyn.addNode(2, 11.0, 21.0, 200.0);
+    try dyn.addEdge(node_idx1, node_idx2, 50, 30, 100);
 
-    try std.testing.expect(graph.nodes.items.len == 2);
-    try std.testing.expect(graph.edges.items.len == 1);
+    try std.testing.expect(dyn.nodes.items.len == 2);
+    try std.testing.expect(dyn.edges.items.len == 1);
 
-    const edge = graph.edges.items[0];
+    const edge = dyn.edges.items[0];
     try std.testing.expect(edge.u_idx == node_idx1);
     try std.testing.expect(edge.v_idx == node_idx2);
     try std.testing.expect(edge.elev_gain == 50);
@@ -195,18 +170,18 @@ test "basic graph" {
 }
 
 test "iterate" {
-    var graph = DynamicGraph.init(std.testing.allocator);
-    defer graph.deinit();
+    var dyn = DynamicGraph.init(std.testing.allocator);
+    defer dyn.deinit();
 
-    const node_idx0 = try graph.addNode(1, 10.0, 20.0, 100.0);
-    const node_idx1 = try graph.addNode(2, 11.0, 21.0, 200.0);
-    const node_idx2 = try graph.addNode(3, 12.0, 22.0, 300.0);
-    const node_idx3 = try graph.addNode(4, 13.0, 23.0, 400.0);
-    try graph.addEdge(node_idx0, node_idx1, 50, 30, 100);
-    try graph.addEdge(node_idx0, node_idx2, 60, 40, 150);
-    try graph.addEdge(node_idx1, node_idx3, 70, 50, 200);
+    const node_idx0 = try dyn.addNode(1, 10.0, 20.0, 100.0);
+    const node_idx1 = try dyn.addNode(2, 11.0, 21.0, 200.0);
+    const node_idx2 = try dyn.addNode(3, 12.0, 22.0, 300.0);
+    const node_idx3 = try dyn.addNode(4, 13.0, 23.0, 400.0);
+    try dyn.addEdge(node_idx0, node_idx1, 50, 30, 100);
+    try dyn.addEdge(node_idx0, node_idx2, 60, 40, 150);
+    try dyn.addEdge(node_idx1, node_idx3, 70, 50, 200);
 
-    var iter = graph.iterateOutgoingEdges(node_idx0);
+    var iter = dyn.iterateOutgoingEdges(node_idx0);
     var count: usize = 0;
     while (iter.next()) |edge| : (count += 1) {
         try std.testing.expect(edge.u_idx == node_idx0);
@@ -228,19 +203,19 @@ test "iterate" {
 }
 
 test "add edges later" {
-    var graph = DynamicGraph.init(std.testing.allocator);
-    defer graph.deinit();
+    var dyn = DynamicGraph.init(std.testing.allocator);
+    defer dyn.deinit();
 
-    const node_idx0 = try graph.addNode(1, 10.0, 20.0, 100.0);
-    const node_idx1 = try graph.addNode(2, 11.0, 21.0, 200.0);
-    const node_idx2 = try graph.addNode(3, 12.0, 22.0, 300.0);
+    const node_idx0 = try dyn.addNode(1, 10.0, 20.0, 100.0);
+    const node_idx1 = try dyn.addNode(2, 11.0, 21.0, 200.0);
+    const node_idx2 = try dyn.addNode(3, 12.0, 22.0, 300.0);
 
     // Edges can be added in any order, and to any node, after the fact.
-    try graph.addEdge(node_idx1, node_idx2, 70, 50, 200);
-    try graph.addEdge(node_idx0, node_idx2, 60, 40, 150);
-    try graph.addEdge(node_idx0, node_idx1, 50, 30, 100);
+    try dyn.addEdge(node_idx1, node_idx2, 70, 50, 200);
+    try dyn.addEdge(node_idx0, node_idx2, 60, 40, 150);
+    try dyn.addEdge(node_idx0, node_idx1, 50, 30, 100);
 
-    var iter = graph.iterateOutgoingEdges(node_idx0);
+    var iter = dyn.iterateOutgoingEdges(node_idx0);
     var count: usize = 0;
     while (iter.next()) |edge| : (count += 1) {
         try std.testing.expect(edge.u_idx == node_idx0);
@@ -256,17 +231,17 @@ test "add edges later" {
 }
 
 test "export" {
-    var graph = DynamicGraph.init(std.testing.allocator);
-    defer graph.deinit();
+    var dyn = DynamicGraph.init(std.testing.allocator);
+    defer dyn.deinit();
 
-    const node_idx1 = try graph.addNode(1, 10.0, 20.0, 100.0);
-    const node_idx2 = try graph.addNode(2, 11.0, 21.0, 200.0);
-    try graph.addEdge(node_idx1, node_idx2, 50, 30, 100);
+    const node_idx1 = try dyn.addNode(1, 10.0, 20.0, 100.0);
+    const node_idx2 = try dyn.addNode(2, 11.0, 21.0, 200.0);
+    try dyn.addEdge(node_idx1, node_idx2, 50, 30, 100);
 
     var buffer: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
 
-    try graph.exportToWriter(&writer);
+    try dyn.exportToWriter(&writer);
 
     var reader = std.Io.Reader.fixed(&buffer);
     var loaded_graph = try DynamicGraph.fromReader(std.testing.allocator, &reader);

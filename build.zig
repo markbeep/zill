@@ -3,30 +3,36 @@ const build_geotiff = @import("build/geotiff.zig");
 const build_sqlite3 = @import("build/sqlite3.zig");
 const build_zlib = @import("build/zlib.zig");
 const build_readosm = @import("build/readosm.zig");
+const zon = @import("build.zig.zon");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    const version = try std.SemanticVersion.parse(zon.version);
+    const options = b.addOptions();
+    options.addOption(std.SemanticVersion, "version", version);
 
     // ============= zill =============
 
     const zill_mod = b.createModule(.{
-        .root_source_file = b.path("src/graph.zig"),
+        .root_source_file = b.path("src/graph/graph.zig"),
         .target = target,
         .optimize = optimize,
     });
+    zill_mod.addOptions("options", options);
 
     // ============= zillconv =============
 
     const translate_tiff = b.addTranslateC(.{
-        .root_source_file = b.path("src/tiff.h"),
+        .root_source_file = b.path("src/conv/tiff.h"),
         .target = target,
         .optimize = optimize,
     });
     build_geotiff.addHeaders(b, target, optimize, translate_tiff);
 
     const translate_osm = b.addTranslateC(.{
-        .root_source_file = b.path("src/osm.h"),
+        .root_source_file = b.path("src/conv/osm.h"),
         .target = target,
         .optimize = optimize,
     });
@@ -36,7 +42,7 @@ pub fn build(b: *std.Build) void {
     const readosm_c_mod = translate_osm.createModule();
 
     const zillconv_mod = b.createModule(.{
-        .root_source_file = b.path("src/zillconv.zig"),
+        .root_source_file = b.path("src/conv/zillconv.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
