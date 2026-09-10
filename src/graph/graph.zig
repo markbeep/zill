@@ -7,6 +7,8 @@ pub const FileHeader = shared.FileHeader;
 
 pub const DynamicGraph = dyn.DynamicGraph;
 
+pub const solve = @import("solve.zig");
+
 test {
     @import("std").testing.refAllDecls(@This());
 }
