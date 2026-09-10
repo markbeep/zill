@@ -20,8 +20,7 @@ The library is split into two sub-libraries that can be used independently:
 
 ## Graph Algorithms
 
-> [!WARNING]
-> The graph algorithms are incomplete. The current implementation computes the maximum elevation gain under a given distance and where the starting point is in a radius around some point. But it does not aggregate or output results in a formatted manner.
+The graph algorithms are incomplete or unstable. The current implementation computes the maximum elevation gain under a given distance and where the starting point is in a radius around some point. It then saves the top `X` results as GPX files.
 
 ```sh
 # usage: zill [-i <path>] [-d <max_distance>] [-r <max_radius>] [--lat <latitude>] [--lon <longitude>]

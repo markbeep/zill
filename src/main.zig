@@ -68,9 +68,15 @@ pub fn main(init: std.process.Init) !void {
 
     // ----------------------
 
+    var results: [5]?solve.PathState = undefined;
+    @memset(&results, null);
+    defer for (results) |res_null| {
+        if (res_null) |r| init.gpa.free(r.path);
+    };
+
     const progress = std.Progress.start(init.io, .{ .root_name = "find max distance" });
     defer progress.end();
-    try solve.findMax(
+    const count = try solve.findMax(
         init.gpa,
         init.io,
         progress,
@@ -80,5 +86,17 @@ pub fn main(init: std.process.Init) !void {
         g.nodes.items,
         g.edges.items,
         g.node_edges.items,
+        &results,
     );
+
+    for (results[0..count], 0..) |res_null, i| {
+        if (res_null) |r| {
+            const rank = count - i;
+            var path_buf: [64]u8 = undefined;
+            var name_buf: [64]u8 = undefined;
+            const path = try std.fmt.bufPrint(&path_buf, "data/route_{d}.gpx", .{rank});
+            const name = try std.fmt.bufPrint(&name_buf, "Route #{d}", .{rank});
+            try solve.writeGpx(init.io, path, name, g.nodes.items, r);
+        }
+    }
 }
