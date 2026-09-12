@@ -112,6 +112,7 @@ pub fn build(b: *std.Build) !void {
 
     // Tests
     const zill_tests = b.addTest(.{ .root_module = zill_mod });
+    zill_tests.root_module.addImport("zbench", b.dependency("zbench", .{ .target = target, .optimize = optimize }).module("zbench"));
     const run_zill_tests = b.addRunArtifact(zill_tests);
 
     const zillconv_tests = b.addTest(.{

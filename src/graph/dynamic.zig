@@ -262,7 +262,7 @@ test "export" {
     defer loaded_graph.deinit();
 
     try std.testing.expect(loaded_graph.nodes.items.len == 2);
-    try std.testing.expect(loaded_graph.edges.items.len == 1);
+    try std.testing.expect(loaded_graph.edges.items.len == 2);
     const loaded_edge = loaded_graph.edges.items[0];
     try std.testing.expect(loaded_edge.u_idx == node_idx1);
     try std.testing.expect(loaded_edge.v_idx == node_idx2);

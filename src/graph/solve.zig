@@ -1,5 +1,6 @@
 const std = @import("std");
 const s = @import("shared.zig");
+const graph = @import("graph.zig");
 
 pub const Coord = struct {
     lat: f64,
@@ -255,4 +256,50 @@ pub fn writeGpx(io: std.Io, path: []const u8, name: []const u8, nodes: []const s
     try out.flush();
 
     std.debug.print("wrote {s} with elev {d}m, dist {d}m, {d} pts\n", .{ path, c.elevation, c.distance, c.path.len });
+}
+
+fn GenBenchDijkstra(comptime node_idx: u32, comptime g: *const graph.DynamicGraph) type {
+    return struct {
+        fn run(allocator: std.mem.Allocator) void {
+            const results = dijkstra(allocator, node_idx, .{ .max_distance = 1_000 }, g.nodes.items, g.edges.items, g.node_edges.items, 5) catch @panic("dijkstra failed");
+            for (results) |r| allocator.free(r.path);
+            allocator.free(results);
+        }
+    };
+}
+
+var bench_g: graph.DynamicGraph = undefined;
+
+test "benchmark distance dijkstra" {
+    const testing = std.testing;
+    const zbench = @import("zbench");
+
+    // One-time graph load: use a fast arena-backed allocator. The debug
+    // `testing.allocator` makes loading the 199 MB graph take tens of seconds.
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+
+    var f = try std.Io.Dir.cwd().openFile(testing.io, "data/100m_graph.zl", .{ .mode = .read_only });
+    defer f.close(testing.io);
+
+    var buffer: [1024]u8 = undefined;
+    var reader = f.reader(testing.io, &buffer);
+    bench_g = try graph.DynamicGraph.fromReader(arena.allocator(), &reader.interface);
+
+    var bench = zbench.Benchmark.init(testing.allocator, .{});
+    defer bench.deinit();
+
+    const target = comptime blk: {
+        var prng = std.Random.DefaultPrng.init(0);
+        const rand = prng.random();
+        break :blk rand.intRangeAtMost(u32, 0, 10000);
+    };
+
+    // ======== Setup done ========
+
+    const Bench = GenBenchDijkstra(target, &bench_g);
+    const name = std.fmt.comptimePrint("Benchmark Dijkstra target={d}", .{target});
+    try bench.add(name, Bench.run, .{ .track_allocations = true });
+
+    try bench.run(testing.io, std.Io.File.stderr());
 }
