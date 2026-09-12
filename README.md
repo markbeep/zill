@@ -22,9 +22,22 @@ The library is split into two sub-libraries that can be used independently:
 
 The graph algorithms are incomplete or unstable. The current implementation computes the maximum elevation gain under a given distance and where the starting point is in a radius around some point. It then saves the top `X` results as GPX files.
 
+```
+Usage: zill [options]
+
+Options:
+  -i, --input-path      Path to the input graph file. Default: data/graph.zl
+  -d, --max-distance    Maximum total distance (in m) path to compute. Default: null
+  -e, --max-elevation   Maximum total elevation path (in m) to compute. Default: null
+  -r, --max-radius      Maximum radius (in m) to consider for starting nodes. Default: 10_000
+      --lat             Latitude of the starting point. Default: 47.38300076849868
+      --lon             Longitude of the starting point. Default: 8.539661719099556
+  -t, --max-threads     Maximum number of threads to use. Default: 1
+  -h, --help            Show this help message
+```
+
 ```sh
-# usage: zill [-i <path>] [-d <max_distance>] [-r <max_radius>] [--lat <latitude>] [--lon <longitude>]
-zig build run -- -i switzerland_walkable.zl
+zig build -Doptimize=ReleaseFast run -- -i switzerland_walkable.zl -d 1000
 ```
 
 ## Convert - Generate .zl file from OSM data
@@ -64,12 +77,3 @@ gdal_translate \
 ### OSM Extraction
 
 https://download.geofabrik.de/europe/switzerland.html
-
-### Regenerate OSM Proto Stubs
-
-The protobuf files in `proto/` are taken from [OSM-binary](https://github.com/openstreetmap/OSM-binary). If they are updated, you can
-regenerate the Zig stubs with the following command:
-
-```sh
-zig build gen-proto
-```

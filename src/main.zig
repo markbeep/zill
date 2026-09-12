@@ -1,48 +1,77 @@
 const std = @import("std");
 const zill = @import("zill");
 const solve = zill.solve;
+const args_parser = @import("args");
 
-fn usage() void {
-    std.debug.print("usage: zill [-i <path>] [-d <max_distance>] [-r <max_radius>] [--lat <latitude>] [--lon <longitude>]\n", .{});
-}
+const Options = struct {
+    @"input-path": []const u8 = "data/graph.zl",
+    @"max-distance": ?i64 = null,
+    @"max-elevation": ?i64 = null,
+    @"max-radius": f64 = 10_000,
+    lat: f64 = 47.38300076849868,
+    lon: f64 = 8.539661719099556,
+    @"max-threads": u32 = 1,
+    help: bool = false,
+
+    pub const shorthands = .{
+        .i = "input-path",
+        .r = "max-radius",
+        .d = "max-distance",
+        .e = "max-elevation",
+        .t = "max-threads",
+        .h = "help",
+    };
+
+    pub const meta = .{
+        .option_docs = .{
+            .@"input-path" = "Path to the input graph file. Default: data/graph.zl",
+            .@"max-distance" = "Maximum total distance (in m) path to compute. Default: null",
+            .@"max-elevation" = "Maximum total elevation path (in m) to compute. Default: null",
+            .@"max-radius" = "Maximum radius (in m) to consider for starting nodes. Default: 10_000",
+            .lat = "Latitude of the starting point. Default: 47.38300076849868",
+            .lon = "Longitude of the starting point. Default: 8.539661719099556",
+            .@"max-threads" = "Maximum number of threads to use. Default: 1",
+            .help = "Show this help message",
+        },
+
+        .usage_summary = "[options]",
+    };
+};
 
 pub fn main(init: std.process.Init) !void {
-    var input_path: []const u8 = "data/graph.zl";
-    var max_distance: i64 = 1000;
-    var max_radius: f64 = 10_000;
-    var lat: f64 = 47.38300076849868;
-    var lon: f64 = 8.539661719099556;
+    // ========= ARGS =========
+    const opts = try args_parser.parseForCurrentProcess(Options, init, .print);
+    defer opts.deinit();
 
-    var args = init.minimal.args.iterate();
-    _ = args.next();
-    while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-            usage();
-            return;
-        } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--input")) {
-            input_path = args.next() orelse return error.InvalidArguments;
-        } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--max-distance")) {
-            const dist_str = args.next() orelse return error.InvalidArguments;
-            max_distance = try std.fmt.parseInt(i64, dist_str, 10);
-        } else if (std.mem.eql(u8, arg, "-r") or std.mem.eql(u8, arg, "--max-radius")) {
-            const radius_str = args.next() orelse return error.InvalidArguments;
-            max_radius = try std.fmt.parseFloat(f64, radius_str);
-        } else if (std.mem.eql(u8, arg, "--lat")) {
-            const lat_str = args.next() orelse return error.InvalidArguments;
-            lat = try std.fmt.parseFloat(f64, lat_str);
-        } else if (std.mem.eql(u8, arg, "--lon")) {
-            const lon_str = args.next() orelse return error.InvalidArguments;
-            lon = try std.fmt.parseFloat(f64, lon_str);
-        } else {
-            usage();
-            return error.InvalidArguments;
-        }
+    if (opts.options.help) {
+        var buffer: [1024]u8 = undefined;
+        var stderr = std.Io.File.stderr().writer(init.io, &buffer);
+        try args_parser.printHelp(Options, "zill", &stderr.interface);
+        try stderr.flush();
+        return;
     }
+    if (opts.options.@"max-threads" == 0) {
+        std.debug.print("Error: max-threads must be greater than 0\n", .{});
+        return error.InvalidArgument;
+    }
+    if (opts.options.@"max-radius" <= 0) {
+        std.debug.print("Error: max-radius must be greater than 0\n", .{});
+        return error.InvalidArgument;
+    }
+    if (opts.options.@"max-distance" == null and opts.options.@"max-elevation" == null) {
+        std.debug.print("Error: at least one of max-distance or max-elevation must be specified\n", .{});
+        return error.InvalidArgument;
+    }
+
+    // ========= START =========
 
     var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
 
-    var f = try std.Io.Dir.cwd().openFile(init.io, input_path, .{ .mode = .read_only });
+    var f = std.Io.Dir.cwd().openFile(init.io, opts.options.@"input-path", .{ .mode = .read_only }) catch |e| {
+        std.debug.print("Failed to open input file: {s}\n", .{opts.options.@"input-path"});
+        return e;
+    };
     defer f.close(init.io);
 
     var buffer: [1024]u8 = undefined;
@@ -68,11 +97,14 @@ pub fn main(init: std.process.Init) !void {
 
     // ----------------------
 
-    var results: [5]?solve.PathState = undefined;
+    var results: [500]?solve.PathState = undefined;
     @memset(&results, null);
     defer for (results) |res_null| {
         if (res_null) |r| init.gpa.free(r.path);
     };
+
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(init.gpa, .{ .async_limit = std.Io.Limit.limited(opts.options.@"max-threads") });
+    defer threaded.deinit();
 
     const progress = std.Progress.start(init.io, .{ .root_name = "find max distance" });
     defer progress.end();
@@ -80,9 +112,9 @@ pub fn main(init: std.process.Init) !void {
         init.gpa,
         init.io,
         progress,
-        .{ .lat = lat, .lon = lon },
-        max_radius,
-        max_distance,
+        .{ .lat = opts.options.lat, .lon = opts.options.lon },
+        opts.options.@"max-radius",
+        opts.options.@"max-distance".?,
         g.nodes.items,
         g.edges.items,
         g.node_edges.items,

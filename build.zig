@@ -94,22 +94,20 @@ pub fn build(b: *std.Build) !void {
         }),
     });
     b.installArtifact(zill_exe);
+    zill_exe.root_module.addImport("args", b.dependency("args", .{ .target = target, .optimize = optimize }).module("args"));
 
     // Run steps
     const zillconv_step = b.step("zillconv", "Build OSM/TIFF parser and generate data/graph.zl");
     const zillconv_cmd = b.addRunArtifact(zillconv_exe);
     zillconv_step.dependOn(&zillconv_cmd.step);
 
-    const zill_step = b.step("zill", "Read data/graph.zl and compute");
-    const zill_cmd = b.addRunArtifact(zill_exe);
-    zill_step.dependOn(&zill_cmd.step);
-
     const run_step = b.step("run", "Alias for `zill` (read data/graph.zl)");
-    run_step.dependOn(&zill_cmd.step);
+    const run_cmd = b.addRunArtifact(zill_exe);
+    run_step.dependOn(&run_cmd.step);
 
     if (b.args) |args| {
         zillconv_cmd.addArgs(args);
-        zill_cmd.addArgs(args);
+        run_cmd.addArgs(args);
     }
 
     // Tests
