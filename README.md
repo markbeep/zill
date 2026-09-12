@@ -20,7 +20,10 @@ The library is split into two sub-libraries that can be used independently:
 
 ## Graph Algorithms
 
-The graph algorithms are incomplete or unstable. The current implementation computes the maximum elevation gain under a given distance and where the starting point is in a radius around some point. It then saves the top `X` results as GPX files.
+There are two variants. You can either find:
+
+- the maximum elevation under a given distance `--max-distance`
+- the minimum distance required to reach a point `--max-elevation` higher than the start (can be very slow and find extremely long distances if there are no close-by climbs)
 
 ```
 Usage: zill [options]

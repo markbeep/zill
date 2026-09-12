@@ -64,7 +64,7 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("Error: at least one of max-distance or max-elevation must be specified\n", .{});
         return error.InvalidArgument;
     }
-    const end: solve.EndCondition = if (opts.options.@"max-distance") |md| .{ .max_distance = md } else if (opts.options.@"max-elevation") |me| .{ .max_elevation = me } else unreachable;
+    const end_condition: solve.EndCondition = if (opts.options.@"max-distance") |md| .{ .max_distance = md } else if (opts.options.@"max-elevation") |me| .{ .max_elevation = me } else unreachable;
 
     // ========= READ GRAPH =========
 
@@ -99,41 +99,28 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Longest edge is from node {d} to node {d} with distance {d} meters\n", .{ from_id, to_id, mx });
 
     // ========= EVALUATE =========
-
-    var results = try init.gpa.alloc(?solve.PathState, opts.options.results);
-    defer init.gpa.free(results);
-    @memset(results, null);
-    defer for (results) |res_null| {
-        if (res_null) |r| init.gpa.free(r.path);
-    };
-
-    const limit = if (opts.options.@"max-threads") |mt| std.Io.Limit.limited(mt) else std.Io.Limit.unlimited;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(init.gpa, .{ .async_limit = limit });
-    defer threaded.deinit();
+    const target = solve.Coord{ .lat = opts.options.lat, .lon = opts.options.lon };
 
     const progress = std.Progress.start(init.io, .{ .root_name = "find max distance" });
     defer progress.end();
-    const count = try solve.findMax(
-        init.gpa,
-        init.io,
-        progress,
-        .{ .lat = opts.options.lat, .lon = opts.options.lon },
-        opts.options.@"max-radius",
-        end,
-        g.nodes.items,
-        g.edges.items,
-        g.node_edges.items,
-        results,
-    );
+    const close_indices = try solve.getCloseNodes(init.gpa, progress, target, opts.options.@"max-radius", g);
+    defer init.gpa.free(close_indices);
 
-    for (results[0..count], 0..) |res_null, i| {
-        if (res_null) |r| {
-            const rank = count - i;
-            var path_buf: [64]u8 = undefined;
-            var name_buf: [64]u8 = undefined;
-            const path = try std.fmt.bufPrint(&path_buf, "data/route_{d}.gpx", .{rank});
-            const name = try std.fmt.bufPrint(&name_buf, "Route #{d}", .{rank});
-            try solve.writeGpx(init.io, path, name, g.nodes.items, r);
-        }
+    const best_start_results = try solve.findBestStartingPoint(init.gpa, init.io, progress, close_indices, g, end_condition, opts.options.results);
+    defer init.gpa.free(best_start_results);
+    std.mem.reverse(solve.Result, best_start_results);
+
+    std.debug.print("Found {d} results\n", .{best_start_results.len});
+    std.debug.print("Top results:\n", .{});
+    for (best_start_results, 0..) |res, i| {
+        std.debug.print("#{d}: elevation={d}\n", .{ i + 1, res.elevation });
+        const path_indices = try solve.dijkstraGetPath(init.gpa, res.idx, end_condition, g.edges.items, g.node_edges.items);
+        defer init.gpa.free(path_indices.indices);
+
+        var path_buf: [64]u8 = undefined;
+        var name_buf: [64]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buf, "data/route_{d}.gpx", .{i + 1});
+        const name = try std.fmt.bufPrint(&name_buf, "Route #{d}", .{i + 1});
+        try solve.writeGpx(init.io, path, name, g.nodes.items, path_indices);
     }
 }
