@@ -10,8 +10,6 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const version = try std.SemanticVersion.parse(zon.version);
-    const options = b.addOptions();
-    options.addOption(std.SemanticVersion, "version", version);
 
     // ============= zill =============
 
@@ -20,6 +18,9 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+
+    const options = b.addOptions();
+    options.addOption(std.SemanticVersion, "version", version);
     zill_mod.addOptions("options", options);
 
     // ============= zillconv =============
@@ -51,6 +52,20 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "zill", .module = zill_mod },
         },
     });
+
+    const conv_options = b.addOptions();
+    const WayType = enum {
+        walkable,
+        cycleable,
+        roadbike,
+    };
+    const way_type = b.option(WayType, "way", "Type of way to consider for routing. Default: walkable") orelse .walkable;
+    conv_options.addOption(WayType, "way_type", way_type);
+
+    const allow_ferry = b.option(bool, "allow_ferry", "Allow ferry routes in the graph. Default: false") orelse false;
+    conv_options.addOption(bool, "allow_ferry", allow_ferry);
+
+    zillconv_mod.addOptions("options", conv_options);
 
     const lib_geotiff = build_geotiff.create(b, target, optimize);
     const lib_sqlite = build_sqlite3.create(b, target, optimize);

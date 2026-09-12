@@ -3,6 +3,7 @@ const eql = std.mem.eql;
 const tiff = @import("tiff.zig");
 const c = @import("readosm");
 const graph = @import("zill");
+const options = @import("options");
 
 pub const Coordinate = struct {
     lat: f32,
@@ -45,7 +46,17 @@ fn parseWayCallback(user_data: ?*const anyopaque, way_ptr: [*c]const c.readosm_w
     const relevant: *WayFinderData = @ptrCast(@alignCast(@constCast(user_data)));
     const way = way_ptr.*;
 
-    if (!isWalkable(false, way)) return c.READOSM_OK;
+    switch (options.way_type) {
+        .walkable => {
+            if (!isWalkable(options.allow_ferry, way)) return c.READOSM_OK;
+        },
+        .cycleable => {
+            if (!isCycleable(options.allow_ferry, way)) return c.READOSM_OK;
+        },
+        .roadbike => {
+            if (!isRoadBikeWay(options.allow_ferry, way)) return c.READOSM_OK;
+        },
+    }
 
     var n: usize = 0;
     while (n < way.node_ref_count) : (n += 1) {
@@ -265,6 +276,247 @@ fn isWalkable(comptime allow_ferry: bool, way: c.readosm_way) bool {
     }
 
     return walkable;
+}
+
+pub fn isCycleable(comptime allow_ferry: bool, way: c.readosm_way) bool {
+    var highway: ?[]const u8 = null;
+    var bicycle: ?[]const u8 = null;
+    var access: ?[]const u8 = null;
+    var vehicle: ?[]const u8 = null;
+    var cycleway: ?[]const u8 = null;
+    var cycleway_left: ?[]const u8 = null;
+    var cycleway_right: ?[]const u8 = null;
+    var cycleway_both: ?[]const u8 = null;
+    var is_ferry = false;
+
+    // 1. Gather relevant tags
+    for (way.tags[0..@intCast(way.tag_count)]) |tag| {
+        const key = std.mem.span(tag.key);
+        const value = std.mem.span(tag.value);
+
+        if (eql(u8, key, "highway")) {
+            highway = value;
+        } else if (eql(u8, key, "bicycle")) {
+            bicycle = value;
+        } else if (eql(u8, key, "access")) {
+            access = value;
+        } else if (eql(u8, key, "vehicle")) {
+            vehicle = value;
+        } else if (eql(u8, key, "cycleway")) {
+            cycleway = value;
+        } else if (eql(u8, key, "cycleway:left")) {
+            cycleway_left = value;
+        } else if (eql(u8, key, "cycleway:right")) {
+            cycleway_right = value;
+        } else if (eql(u8, key, "cycleway:both")) {
+            cycleway_both = value;
+        } else if (eql(u8, key, "route") and eql(u8, value, "ferry")) {
+            is_ferry = true;
+        } else if (eql(u8, key, "ferry") and eql(u8, value, "yes")) {
+            is_ferry = true;
+        } else if (eql(u8, key, "amenity") and eql(u8, value, "ferry_terminal")) {
+            is_ferry = true;
+        }
+    }
+
+    if (!allow_ferry and is_ferry) {
+        return false;
+    }
+
+    const hw = highway orelse return false;
+
+    // 2. Explicit bicycle access overrides everything else
+    if (bicycle) |b| {
+        if (any(b, &.{ "no", "private", "dismount", "use_sidepath" })) return false;
+        if (any(b, &.{ "yes", "designated", "permissive" })) return true;
+    }
+
+    // 3. Vehicle-level restrictions
+    if (vehicle) |v| {
+        if (any(v, &.{ "no", "private" })) return false;
+        if (any(v, &.{ "yes", "designated", "permissive" })) return true;
+    }
+
+    // 4. General access restrictions
+    if (access) |a| {
+        if (any(a, &.{ "no", "private" })) return false;
+    }
+
+    // 5. Explicit cycleway infrastructure alongside/on roads
+    inline for (&.{ cycleway, cycleway_left, cycleway_right, cycleway_both }) |cway_tag| {
+        if (cway_tag) |cway| {
+            if (!any(cway, &.{ "no", "none" })) return true;
+        }
+    }
+
+    // 6. Dedicated cycling infrastructure
+    if (eql(u8, hw, "cycleway")) {
+        return true;
+    }
+
+    // 7. Inherently prohibited infrastructure for standard cycling
+    if (any(hw, &.{
+        "motorway",
+        "motorway_link",
+        "steps",
+        "corridor",
+        "elevator",
+        "proposed",
+        "construction",
+        "abandoned",
+        "platform",
+    })) {
+        return false;
+    }
+
+    // 8. Pedestrian/hiking infrastructure requires explicit bicycle allowance
+    // (Checked above: if bicycle=yes was present, it already returned true)
+    if (any(hw, &.{ "footway", "pedestrian", "path", "bridleway" })) {
+        return false;
+    }
+
+    // 9. Standard road network (bicycles allowed by default)
+    if (any(hw, &.{
+        "residential",
+        "living_street",
+        "service",
+        "unclassified",
+        "tertiary",
+        "tertiary_link",
+        "secondary",
+        "secondary_link",
+        "primary",
+        "primary_link",
+        "track",
+        "road",
+    })) {
+        return true;
+    }
+
+    return false;
+}
+
+pub fn isRoadBikeSurface(way: c.readosm_way) bool {
+    var highway: ?[]const u8 = null;
+    var surface: ?[]const u8 = null;
+    var smoothness: ?[]const u8 = null;
+    var tracktype: ?[]const u8 = null;
+
+    for (way.tags[0..@intCast(way.tag_count)]) |tag| {
+        const k = std.mem.span(tag.key);
+        const v = std.mem.span(tag.value);
+
+        if (eql(u8, k, "highway")) {
+            highway = v;
+        } else if (eql(u8, k, "surface")) {
+            surface = v;
+        } else if (eql(u8, k, "smoothness")) {
+            smoothness = v;
+        } else if (eql(u8, k, "tracktype")) {
+            tracktype = v;
+        }
+    }
+
+    const hw = highway orelse return false;
+
+    // 1. Smoothness check (reject rough/poor road conditions)
+    if (smoothness) |sm| {
+        if (any(sm, &.{
+            "bad",
+            "very_bad",
+            "horrible",
+            "very_horrible",
+            "impassable",
+            "robust_wheels",
+            "high_clearance",
+            "off_road_wheels",
+        })) {
+            return false;
+        }
+    }
+
+    // 2. Agricultural / Forestry tracktype validation
+    if (tracktype) |tt| {
+        // Only solid, sealed paved tracks (grade1) are suitable for road bikes
+        if (!eql(u8, tt, "grade1")) return false;
+    }
+
+    // 3. Explicit surface checks
+    if (surface) |s| {
+        // Fast-pass for confirmed smooth paved materials
+        if (any(s, &.{
+            "asphalt",
+            "paved",
+            "concrete",
+            "concrete:lanes",
+            "concrete:plates",
+            "tarmac",
+            "chipseal",
+        })) {
+            return true;
+        }
+
+        // Explicitly reject cobblestones, sett, and all unpaved types
+        if (any(s, &.{
+            "unpaved",
+            "compacted",
+            "fine_gravel",
+            "gravel",
+            "pebblestone",
+            "dirt",
+            "earth",
+            "ground",
+            "grass",
+            "grass_paver",
+            "sand",
+            "mud",
+            "scree",
+            "wood",
+            "sett",
+            "cobblestone",
+            "cobblestone:flattened",
+            "unhewn_cobblestone",
+        })) {
+            return false;
+        }
+
+        // Any other non-standard surface tag is assumed non-rideable for a road bike
+        return false;
+    }
+
+    // 4. Default inference when `surface` is missing:
+    // Tracks, paths, and bridleways default to unpaved unless explicitly marked paved
+    if (any(hw, &.{ "track", "path", "bridleway", "footway" })) {
+        return false;
+    }
+
+    // Standard classified roads and dedicated cycleways are paved by default in most regions
+    if (any(hw, &.{
+        "primary",
+        "primary_link",
+        "secondary",
+        "secondary_link",
+        "tertiary",
+        "tertiary_link",
+        "unclassified",
+        "residential",
+        "living_street",
+        "cycleway",
+    })) {
+        return true;
+    }
+
+    return false;
+}
+
+pub fn isRoadBikeWay(comptime allow_ferry: bool, way: c.readosm_way) bool {
+    // 1. Must be legally cycleable
+    if (!isCycleable(allow_ferry, way)) return false;
+
+    // 2. Must be paved and smooth enough for skinny road tires
+    if (!isRoadBikeSurface(way)) return false;
+
+    return true;
 }
 
 fn any(v: []const u8, comptime targets: []const []const u8) bool {
