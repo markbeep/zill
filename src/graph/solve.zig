@@ -12,6 +12,11 @@ pub const PathState = struct {
     path: []u32,
 };
 
+pub const EndCondition = union(enum) {
+    max_distance: u32,
+    max_elevation: u32,
+};
+
 fn comparePath(_: bool, a: PathState, b: PathState) std.math.Order {
     return std.math.order(a.elevation, b.elevation);
 }
@@ -35,7 +40,7 @@ pub fn findMax(
     progress: std.Progress.Node,
     from: Coord,
     max_radius_m: f64,
-    max_distance_m: i64,
+    end: EndCondition,
     nodes: []const s.Node,
     edges: []const s.Edge,
     outgoing: []std.ArrayList(u32),
@@ -68,7 +73,7 @@ pub fn findMax(
         var futures = try allocator.alloc(std.Io.Future(DijkstraResult), close.items.len);
         defer allocator.free(futures);
         for (close.items, 0..) |c, i| {
-            futures[i] = io.async(dijkstra, .{ allocator, c, max_distance_m, nodes, edges, outgoing, max_results.len });
+            futures[i] = io.async(dijkstra, .{ allocator, c, end, nodes, edges, outgoing, max_results.len });
             search_progress.completeOne();
         }
         for (futures) |*f| {
@@ -109,7 +114,7 @@ fn compareForMaxElev(nodes: []const s.Node, a: u32, b: u32) std.math.Order {
 fn dijkstra(
     allocator: std.mem.Allocator,
     start: u32,
-    max_distance: i64,
+    end: EndCondition,
     nodes: []const s.Node,
     edges: []const s.Edge,
     outgoing: []std.ArrayList(u32),
@@ -137,9 +142,17 @@ fn dijkstra(
 
             const new_distance = cur_count.distance + edge.distance;
             if (new_distance == 0) continue;
-            if (new_distance > max_distance) continue;
-
             const new_elevation = cur_count.elevation + edge.elev_gain - edge.elev_loss;
+
+            switch (end) {
+                .max_distance => |max_distance| {
+                    if (new_distance > max_distance) continue;
+                },
+                .max_elevation => |max_elevation| {
+                    if (new_elevation > max_elevation) continue;
+                },
+            }
+
             if (out_count) |c| {
                 const new_ratio = @divTrunc(new_elevation, new_distance);
                 if (c.distance == 0) continue;

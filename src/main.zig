@@ -5,12 +5,13 @@ const args_parser = @import("args");
 
 const Options = struct {
     @"input-path": []const u8 = "data/graph.zl",
-    @"max-distance": ?i64 = null,
-    @"max-elevation": ?i64 = null,
-    @"max-radius": f64 = 10_000,
+    @"max-distance": ?u32 = null,
+    @"max-elevation": ?u32 = null,
+    @"max-radius": f64 = 100,
     lat: f64 = 47.38300076849868,
     lon: f64 = 8.539661719099556,
-    @"max-threads": u32 = 1,
+    @"max-threads": ?u32 = null,
+    results: u32 = 5,
     help: bool = false,
 
     pub const shorthands = .{
@@ -30,7 +31,8 @@ const Options = struct {
             .@"max-radius" = "Maximum radius (in m) to consider for starting nodes. Default: 10_000",
             .lat = "Latitude of the starting point. Default: 47.38300076849868",
             .lon = "Longitude of the starting point. Default: 8.539661719099556",
-            .@"max-threads" = "Maximum number of threads to use. Default: 1",
+            .@"max-threads" = "Maximum number of threads to use. Default: null (all)",
+            .results = "Number of results to save. Default: 5",
             .help = "Show this help message",
         },
 
@@ -62,8 +64,9 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("Error: at least one of max-distance or max-elevation must be specified\n", .{});
         return error.InvalidArgument;
     }
+    const end: solve.EndCondition = if (opts.options.@"max-distance") |md| .{ .max_distance = md } else if (opts.options.@"max-elevation") |me| .{ .max_elevation = me } else unreachable;
 
-    // ========= START =========
+    // ========= READ GRAPH =========
 
     var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
@@ -95,15 +98,17 @@ pub fn main(init: std.process.Init) !void {
     const to_id = g.nodes.items[to].id;
     std.debug.print("Longest edge is from node {d} to node {d} with distance {d} meters\n", .{ from_id, to_id, mx });
 
-    // ----------------------
+    // ========= EVALUATE =========
 
-    var results: [500]?solve.PathState = undefined;
-    @memset(&results, null);
+    var results = try init.gpa.alloc(?solve.PathState, opts.options.results);
+    defer init.gpa.free(results);
+    @memset(results, null);
     defer for (results) |res_null| {
         if (res_null) |r| init.gpa.free(r.path);
     };
 
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(init.gpa, .{ .async_limit = std.Io.Limit.limited(opts.options.@"max-threads") });
+    const limit = if (opts.options.@"max-threads") |mt| std.Io.Limit.limited(mt) else std.Io.Limit.unlimited;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(init.gpa, .{ .async_limit = limit });
     defer threaded.deinit();
 
     const progress = std.Progress.start(init.io, .{ .root_name = "find max distance" });
@@ -114,11 +119,11 @@ pub fn main(init: std.process.Init) !void {
         progress,
         .{ .lat = opts.options.lat, .lon = opts.options.lon },
         opts.options.@"max-radius",
-        opts.options.@"max-distance".?,
+        end,
         g.nodes.items,
         g.edges.items,
         g.node_edges.items,
-        &results,
+        results,
     );
 
     for (results[0..count], 0..) |res_null, i| {
