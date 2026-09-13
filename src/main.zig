@@ -64,7 +64,7 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("Error: at least one of max-distance or max-elevation must be specified\n", .{});
         return error.InvalidArgument;
     }
-    const end_condition: solve.EndCondition = if (opts.options.@"max-distance") |md| .{ .max_distance = md } else if (opts.options.@"max-elevation") |me| .{ .max_elevation = me } else unreachable;
+    const end_condition: solve.EndCondition = if (opts.options.@"max-distance") |md| .{ .max_distance = md } else if (opts.options.@"max-elevation") |me| .{ .at_least_elevation = me } else unreachable;
 
     // ========= READ GRAPH =========
 
@@ -114,7 +114,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Top results:\n", .{});
     for (best_start_results, 0..) |res, i| {
         std.debug.print("#{d}: elevation={d}\n", .{ i + 1, res.elevation });
-        const path_indices = try solve.dijkstraGetPath(init.gpa, res.idx, end_condition, g.edges.items, g.node_edges.items);
+        const path_indices = try solve.Dijkstra(.Path).run(init.gpa, res.idx, end_condition, g.edges.items, g.node_edges.items);
         defer init.gpa.free(path_indices.indices);
 
         var path_buf: [64]u8 = undefined;

@@ -15,7 +15,7 @@ pub const PathState = struct {
 
 pub const EndCondition = union(enum) {
     max_distance: u32,
-    max_elevation: u32,
+    at_least_elevation: u32,
 };
 
 // =============================
@@ -76,7 +76,7 @@ pub fn findBestStartingPoint(
             _edges: []const s.Edge,
             _outgoing: []std.ArrayList(u32),
         ) !Result {
-            const elevation = try dijkstraFindHighest(_allocator, start_idx, _end_condition, _edges, _outgoing);
+            const elevation = try Dijkstra(.Elevation).run(_allocator, start_idx, _end_condition, _edges, _outgoing);
             p.completeOne();
             return .{ .elevation = elevation, .idx = start_idx };
         }
@@ -110,67 +110,116 @@ pub fn findBestStartingPoint(
     }
 
     var results = try allocator.alloc(Result, ordered.count());
-    for (ordered.items, 0..) |r, i| {
-        results[i] = r;
+    var i: usize = 0;
+    while (ordered.pop()) |next| : (i += 1) {
+        results[i] = next;
     }
     return results;
 }
 
-/// Finds the highest elevation reachable from `start_idx` without exceeding the given `end` condition.
-/// Does not return the path, only the highest elevation found. Use `dijkstraGetPath` to retrieve the path if needed.
-fn dijkstraFindHighest(
-    allocator: std.mem.Allocator,
-    start_idx: u32,
-    end_condition: EndCondition,
-    edges: []const s.Edge,
-    outgoing: []std.ArrayList(u32),
-) !i64 {
-    const VisitedNode = struct {
-        distance: i64,
-        elevation: i32,
+pub const DijkstraReturn = enum {
+    Elevation,
+    Path,
+};
 
-        fn compareForDistance(visited: *const std.AutoHashMap(u32, @This()), u_idx: u32, v_idx: u32) std.math.Order {
-            const u = visited.get(u_idx) orelse unreachable;
-            const v = visited.get(v_idx) orelse unreachable;
-            return std.math.order(u.distance, v.distance);
-        }
+/// Finds a path from `start_idx` to the optimal elevation reachable without exceeding the given `end_condition`.
+/// The optimization target is determined by `optimize`: `.Maximize` targets the highest elevation while
+/// `.Minimize` targets elevations with the least total change.
+/// The return type is determined by `dtype`: `.Elevation` returns the optimal elevation as an `i64`,
+/// while `.Path` returns a `PathDetails` struct containing the path indices (in order from start to end),
+/// total distance, and total elevation. Caller owns any returned slices.
+pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
+    const ReturnType = switch (dtype) {
+        .Elevation => i64,
+        .Path => PathDetails,
     };
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
+    return struct {
+        pub fn run(
+            allocator: std.mem.Allocator,
+            start_idx: u32,
+            end_condition: EndCondition,
+            edges: []const s.Edge,
+            outgoing: []std.ArrayList(u32),
+        ) !ReturnType {
+            const VisitedNode = struct {
+                idx: u32,
+                distance: i64,
+                elevation: i32,
+                prev: ?u32,
 
-    var visited = std.AutoHashMap(u32, VisitedNode).init(arena.allocator());
-    try visited.put(start_idx, .{ .distance = 0, .elevation = 0 });
+                fn compareForDistance(visited: *const std.AutoHashMap(u32, @This()), u_idx: u32, v_idx: u32) std.math.Order {
+                    const u = visited.get(u_idx) orelse unreachable;
+                    const v = visited.get(v_idx) orelse unreachable;
+                    return std.math.order(u.distance, v.distance);
+                }
+            };
 
-    var pq = std.PriorityQueue(u32, *const std.AutoHashMap(u32, VisitedNode), VisitedNode.compareForDistance).initContext(&visited);
-    try pq.push(arena.allocator(), start_idx);
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
 
-    var highest: i64 = 0;
-    while (pq.pop()) |current_idx| {
-        const u = visited.get(current_idx) orelse unreachable;
-        if (end_condition == .max_elevation and u.elevation >= end_condition.max_elevation) {
-            return u.elevation;
-        }
+            var visited = std.AutoHashMap(u32, VisitedNode).init(arena.allocator());
+            const initial = VisitedNode{ .idx = start_idx, .distance = 0, .elevation = 0, .prev = null };
+            try visited.put(start_idx, initial);
+            var best: VisitedNode = initial;
 
-        for (outgoing[current_idx].items) |outgoing_edge_idx| {
-            const edge = edges[outgoing_edge_idx];
-            const new_distance = u.distance + edge.distance;
-            const new_elevation = u.elevation + edge.elev_gain - edge.elev_loss;
+            var pq = std.PriorityQueue(u32, *const std.AutoHashMap(u32, VisitedNode), VisitedNode.compareForDistance).initContext(&visited);
+            try pq.push(arena.allocator(), start_idx);
 
-            if (end_condition == .max_distance and new_distance > end_condition.max_distance) {
-                continue;
+            while (pq.pop()) |current_idx| {
+                const u = visited.get(current_idx) orelse unreachable;
+                if (end_condition == .at_least_elevation and u.elevation >= end_condition.at_least_elevation) {
+                    best = u;
+                    break;
+                }
+
+                for (outgoing[current_idx].items) |outgoing_edge_idx| {
+                    const edge = edges[outgoing_edge_idx];
+                    const new_distance = u.distance + edge.distance;
+                    const new_elevation = u.elevation + edge.elev_gain - edge.elev_loss;
+
+                    if (end_condition == .max_distance and new_distance > end_condition.max_distance) {
+                        continue;
+                    }
+
+                    if (visited.get(edge.v_idx)) |v| {
+                        if (new_distance >= v.distance) continue;
+                    }
+
+                    const new_visited = VisitedNode{
+                        .idx = edge.v_idx,
+                        .distance = new_distance,
+                        .elevation = new_elevation,
+                        .prev = edge.u_idx,
+                    };
+                    try visited.put(edge.v_idx, new_visited);
+                    try pq.push(arena.allocator(), edge.v_idx);
+
+                    if (new_elevation > best.elevation) {
+                        best = new_visited;
+                    }
+                }
             }
 
-            if (visited.get(edge.v_idx)) |v| {
-                if (new_distance >= v.distance) continue;
-            }
+            switch (dtype) {
+                .Elevation => return best.elevation,
+                .Path => {
+                    // Non-arena allocator
+                    var path = std.ArrayList(u32).empty;
+                    try path.append(allocator, best.idx);
+                    var current = best;
+                    while (current.prev) |prev| {
+                        try path.append(allocator, prev);
+                        current = visited.get(prev) orelse unreachable;
+                    }
 
-            try visited.put(edge.v_idx, .{ .distance = new_distance, .elevation = new_elevation });
-            try pq.push(arena.allocator(), edge.v_idx);
-            highest = @max(highest, new_elevation);
+                    const owned = try path.toOwnedSlice(allocator);
+                    std.mem.reverse(u32, owned);
+                    return .{ .indices = owned, .distance = best.distance, .elevation = best.elevation };
+                },
+            }
         }
-    }
-    return highest;
+    };
 }
 
 pub const PathDetails = struct {
@@ -178,88 +227,6 @@ pub const PathDetails = struct {
     distance: i64,
     elevation: i32,
 };
-
-/// Finds a path from `start_idx` to the highest elevation reachable without exceeding the given `end_condition`.
-/// Returns a `PathDetails` struct containing the path indices, total distance, and total elevation gain. The path is returned in order from start to end.
-/// Caller owns the returned slice.
-pub fn dijkstraGetPath(
-    allocator: std.mem.Allocator,
-    start_idx: u32,
-    end_condition: EndCondition,
-    edges: []const s.Edge,
-    outgoing: []std.ArrayList(u32),
-) !PathDetails {
-    const VisitedNode = struct {
-        idx: u32,
-        distance: i64,
-        elevation: i32,
-        prev: ?u32,
-
-        fn compareForDistance(visited: *const std.AutoHashMap(u32, @This()), u_idx: u32, v_idx: u32) std.math.Order {
-            const u = visited.get(u_idx) orelse unreachable;
-            const v = visited.get(v_idx) orelse unreachable;
-            return std.math.order(u.distance, v.distance);
-        }
-    };
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    var visited = std.AutoHashMap(u32, VisitedNode).init(arena.allocator());
-    const initial = VisitedNode{ .idx = start_idx, .distance = 0, .elevation = 0, .prev = null };
-    try visited.put(start_idx, initial);
-    var highest: VisitedNode = initial;
-
-    var pq = std.PriorityQueue(u32, *const std.AutoHashMap(u32, VisitedNode), VisitedNode.compareForDistance).initContext(&visited);
-    try pq.push(arena.allocator(), start_idx);
-
-    while (pq.pop()) |current_idx| {
-        const u = visited.get(current_idx) orelse unreachable;
-        if (end_condition == .max_elevation and u.elevation >= end_condition.max_elevation) {
-            highest = u;
-            break;
-        }
-
-        for (outgoing[current_idx].items) |outgoing_edge_idx| {
-            const edge = edges[outgoing_edge_idx];
-            const new_distance = u.distance + edge.distance;
-            const new_elevation = u.elevation + edge.elev_gain - edge.elev_loss;
-
-            if (end_condition == .max_distance and new_distance > end_condition.max_distance) {
-                continue;
-            }
-
-            if (visited.get(edge.v_idx)) |v| {
-                if (new_distance >= v.distance) continue;
-            }
-
-            const new_visited = VisitedNode{
-                .idx = edge.v_idx,
-                .distance = new_distance,
-                .elevation = new_elevation,
-                .prev = edge.u_idx,
-            };
-            try visited.put(edge.v_idx, new_visited);
-            try pq.push(arena.allocator(), edge.v_idx);
-            if (new_elevation > highest.elevation) {
-                highest = new_visited;
-            }
-        }
-    }
-
-    // Non-arena allocator
-    var path = std.ArrayList(u32).empty;
-    try path.append(allocator, highest.idx);
-    var current = highest;
-    while (current.prev) |prev| {
-        try path.append(allocator, prev);
-        current = visited.get(prev) orelse unreachable;
-    }
-
-    const owned = try path.toOwnedSlice(allocator);
-    std.mem.reverse(u32, owned);
-    return .{ .indices = owned, .distance = highest.distance, .elevation = highest.elevation };
-}
 
 /// Computes great-circle distance between two coordinates in meters
 pub fn haversineMeters(p1: Coord, p2: Coord) f64 {
@@ -316,30 +283,17 @@ pub fn writeGpx(io: std.Io, file_path: []const u8, name: []const u8, nodes: []co
 
 // ======================================== Benchmarks ========================================
 
-const DijkstraType = enum {
-    Highest,
-    Path,
+const DijkstraTestType = enum {
+    HighestPath,
+    HighestInt,
 };
 
-fn GenBenchDijkstra(comptime dtype: DijkstraType, comptime node_idx: u32, comptime g: *const graph.DynamicGraph) type {
+fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, comptime g: *const graph.DynamicGraph) type {
     switch (dtype) {
-        .Highest => {
+        .HighestPath => {
             return struct {
                 fn run(allocator: std.mem.Allocator) void {
-                    _ = dijkstraFindHighest(
-                        allocator,
-                        node_idx,
-                        .{ .max_distance = 1_000 },
-                        g.edges.items,
-                        g.node_edges.items,
-                    ) catch @panic("dijkstra2 failed");
-                }
-            };
-        },
-        .Path => {
-            return struct {
-                fn run(allocator: std.mem.Allocator) void {
-                    const result = dijkstraGetPath(
+                    const result = Dijkstra(.Path).run(
                         allocator,
                         node_idx,
                         .{ .max_distance = 1_000 },
@@ -347,6 +301,19 @@ fn GenBenchDijkstra(comptime dtype: DijkstraType, comptime node_idx: u32, compti
                         g.node_edges.items,
                     ) catch @panic("dijkstra2 failed");
                     defer allocator.free(result.indices);
+                }
+            };
+        },
+        .HighestInt => {
+            return struct {
+                fn run(allocator: std.mem.Allocator) void {
+                    _ = Dijkstra(.Elevation).run(
+                        allocator,
+                        node_idx,
+                        .{ .max_distance = 1_000 },
+                        g.edges.items,
+                        g.node_edges.items,
+                    ) catch @panic("dijkstra2 failed");
                 }
             };
         },
@@ -364,7 +331,7 @@ test "benchmark distance dijkstra" {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
 
-    var f = try std.Io.Dir.cwd().openFile(testing.io, "data/100m_graph.zl", .{ .mode = .read_only });
+    var f = try std.Io.Dir.cwd().openFile(testing.io, "data/switzerland_walkable.zl", .{ .mode = .read_only });
     defer f.close(testing.io);
 
     var buffer: [1024]u8 = undefined;
@@ -382,11 +349,11 @@ test "benchmark distance dijkstra" {
 
     // ======== Setup done ========
 
-    const Bench1 = GenBenchDijkstra(.Highest, target, &bench_g);
-    try bench.add("Benchmark peak finder Dijkstra", Bench1.run, .{ .track_allocations = true });
+    const Bench1 = GenBenchDijkstra(.HighestPath, target, &bench_g);
+    try bench.add("Benchmark path determining Dijkstra", Bench1.run, .{ .track_allocations = true });
 
-    const Bench2 = GenBenchDijkstra(.Path, target, &bench_g);
-    try bench.add("Benchmark path determining Dijkstra", Bench2.run, .{ .track_allocations = true });
+    const Bench2 = GenBenchDijkstra(.HighestInt, target, &bench_g);
+    try bench.add("Benchmark peak finder Dijkstra (new impl)", Bench2.run, .{ .track_allocations = true });
 
     try bench.run(testing.io, std.Io.File.stderr());
 }
