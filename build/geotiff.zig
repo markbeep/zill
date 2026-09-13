@@ -6,6 +6,8 @@ pub fn create(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    lib_tiff: *std.Build.Step.Compile,
+    proj: *std.Build.Step.Compile,
 ) *std.Build.Step.Compile {
     const geotiff_dep = b.dependency("libgeotiff", .{ .target = target, .optimize = optimize });
     const proj_dep = b.dependency("proj", .{ .target = target, .optimize = optimize });
@@ -21,13 +23,13 @@ pub fn create(
         }),
     });
 
-    const lib_tiff = build_tiff.create(b, target, optimize);
     lib.root_module.linkLibrary(lib_tiff);
     lib.root_module.addIncludePath(tiff_dep.path("libtiff"));
+    lib.root_module.addIncludePath(geotiff_dep.path("libxtiff"));
 
-    const proj = build_proj.create(b, target, optimize);
     lib.root_module.linkLibrary(proj);
     lib.root_module.addIncludePath(proj_dep.path("include"));
+    lib.root_module.addIncludePath(proj_dep.path("src"));
 
     const gtiff_h = makeGeotiffH(b, geotiff_dep);
     const geo_config_h = makeGeoConfigH(b, geotiff_dep);

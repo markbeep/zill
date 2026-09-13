@@ -4,8 +4,10 @@ pub fn create(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    lib_sqlite: *std.Build.Step.Compile,
 ) *std.Build.Step.Compile {
     const proj_dep = b.dependency("proj", .{ .target = target, .optimize = optimize });
+    const sqlite_dep = b.dependency("sqlite", .{ .target = target, .optimize = optimize });
 
     const lib = b.addLibrary(.{
         .name = "proj",
@@ -17,6 +19,9 @@ pub fn create(
             .link_libcpp = true,
         }),
     });
+
+    lib.root_module.linkLibrary(lib_sqlite);
+    lib.root_module.addIncludePath(sqlite_dep.path(""));
 
     lib.root_module.addCSourceFiles(.{
         .root = proj_dep.path("src"),
@@ -273,4 +278,5 @@ pub fn addHeaders(
 ) void {
     const proj_dep = b.dependency("proj", .{ .target = target, .optimize = optimize });
     translate_c.addIncludePath(proj_dep.path("include"));
+    translate_c.addIncludePath(proj_dep.path("src"));
 }

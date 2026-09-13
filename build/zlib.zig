@@ -17,12 +17,19 @@ pub fn create(
         }),
     });
 
-    const flags = &.{
-        "-std=c99",
-        "-DHAVE_UNISTD_H",
-        "-DZ_HAVE_UNISTD_H",
-        "-D_POSIX_C_SOURCE=200809L",
-    };
+    const is_windows = target.result.os.tag == .windows;
+
+    const flags: []const []const u8 = if (is_windows)
+        &.{
+            "-std=c99",
+        }
+    else
+        &.{
+            "-std=c99",
+            "-DHAVE_UNISTD_H",
+            "-DZ_HAVE_UNISTD_H",
+            "-D_POSIX_C_SOURCE=200809L",
+        };
 
     lib.root_module.addCSourceFiles(.{
         .root = zlib_dep.path(""),

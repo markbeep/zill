@@ -2,6 +2,9 @@ const std = @import("std");
 const build_geotiff = @import("build/geotiff.zig");
 const build_sqlite3 = @import("build/sqlite3.zig");
 const build_zlib = @import("build/zlib.zig");
+const build_expat = @import("build/expat.zig");
+const build_tiff = @import("build/tiff.zig");
+const build_proj = @import("build/proj.zig");
 const build_readosm = @import("build/readosm.zig");
 const zon = @import("build.zig.zon");
 
@@ -67,10 +70,13 @@ pub fn build(b: *std.Build) !void {
 
     zillconv_mod.addOptions("options", conv_options);
 
-    const lib_geotiff = build_geotiff.create(b, target, optimize);
-    const lib_sqlite = build_sqlite3.create(b, target, optimize);
     const lib_zlib = build_zlib.create(b, target, optimize);
-    const lib_readosm = build_readosm.create(b, target, optimize);
+    const lib_sqlite = build_sqlite3.create(b, target, optimize);
+    const lib_expat = build_expat.create(b, target, optimize);
+    const lib_tiff = build_tiff.create(b, target, optimize, lib_zlib);
+    const lib_readosm = build_readosm.create(b, target, optimize, lib_expat, lib_zlib);
+    const lib_proj = build_proj.create(b, target, optimize, lib_sqlite);
+    const lib_geotiff = build_geotiff.create(b, target, optimize, lib_tiff, lib_proj);
 
     // ============= zillconv executable =============
 
@@ -92,7 +98,7 @@ pub fn build(b: *std.Build) !void {
     zillconv_exe.root_module.linkLibrary(lib_sqlite);
     zillconv_exe.root_module.linkLibrary(lib_zlib);
     zillconv_exe.root_module.linkLibrary(lib_readosm);
-    zillconv_exe.root_module.linkSystemLibrary("expat", .{});
+    zillconv_exe.root_module.linkLibrary(lib_expat);
     b.installArtifact(zillconv_exe);
 
     // ============= zill executable =============
@@ -138,7 +144,7 @@ pub fn build(b: *std.Build) !void {
     zillconv_tests.root_module.linkLibrary(lib_sqlite);
     zillconv_tests.root_module.linkLibrary(lib_zlib);
     zillconv_tests.root_module.linkLibrary(lib_readosm);
-    zillconv_tests.root_module.linkSystemLibrary("expat", .{});
+    zillconv_tests.root_module.linkLibrary(lib_expat);
     const run_zillconv_tests = b.addRunArtifact(zillconv_tests);
 
     const test_step = b.step("test", "Run all tests");

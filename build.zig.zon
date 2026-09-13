@@ -38,6 +38,10 @@
             .url = "https://github.com/hendriknielaender/zBench/archive/refs/tags/v0.13.0.tar.gz",
             .hash = "zbench-0.13.0-YTdc7xVBAQCCMC-IdLLuotBeiNNNm8k9Pi2V4VYqrwfI",
         },
+        .expat = .{
+            .url = "https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz",
+            .hash = "N-V-__8AAAU7NgAGAqvCIQeIrepE_HMZvugVUD62SjnQluXf",
+        },
     },
     .minimum_zig_version = "0.16.0",
     .paths = .{""},

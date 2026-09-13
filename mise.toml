@@ -2,3 +2,29 @@
 uv = "latest"
 zig = "0.16.0"
 zls = "0.16.0"
+
+# Cross-compile release binaries into dist/ with platform-suffixed names,
+# ready to attach to a GitHub release.
+#
+# Naming: <binary>-<target>. Windows binaries keep the .exe extension.
+[tasks."build:all"]
+description = "Cross-compile optimized binaries for all major platforms"
+run = [
+  # Clear the staging directory left over from a previous/interrupted run.
+  "rm -rf dist/bin",
+
+  # Linux (static musl, baseline CPU for maximum compatibility)
+  "zig build -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget=x86_64-linux-musl --prefix dist && mv dist/bin/zill dist/zill-x86_64-linux-musl && mv dist/bin/zillconv dist/conv-x86_64-linux-musl",
+  "zig build -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget=aarch64-linux-musl --prefix dist && mv dist/bin/zill dist/zill-aarch64-linux-musl && mv dist/bin/zillconv dist/conv-aarch64-linux-musl",
+
+  # Windows (MinGW/GNU ABI, standalone static binary)
+  "zig build -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget=x86_64-windows-gnu --prefix dist && mv dist/bin/zill.exe dist/zill-x86_64-windows-gnu.exe && mv dist/bin/zillconv.exe dist/conv-x86_64-windows-gnu.exe",
+  "zig build -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget=aarch64-windows-gnu --prefix dist && mv dist/bin/zill.exe dist/zill-aarch64-windows-gnu.exe && mv dist/bin/zillconv.exe dist/conv-aarch64-windows-gnu.exe",
+
+  # macOS (macOS 11 Big Sur baseline for broad version support)
+  "zig build -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget=x86_64-macos.11.0 --prefix dist && mv dist/bin/zill dist/zill-x86_64-macos && mv dist/bin/zillconv dist/conv-x86_64-macos",
+  "zig build -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget=aarch64-macos.11.0 --prefix dist && mv dist/bin/zill dist/zill-aarch64-macos && mv dist/bin/zillconv dist/conv-aarch64-macos",
+
+  # Drop the staging directory (and Windows .pdb symbols) again.
+  "rm -rf dist/bin",
+]

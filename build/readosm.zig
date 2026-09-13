@@ -4,14 +4,18 @@ pub fn create(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    lib_expat: *std.Build.Step.Compile,
+    lib_zlib: *std.Build.Step.Compile,
 ) *std.Build.Step.Compile {
     const readosm_dep = b.dependency("readosm", .{
         .target = target,
         .optimize = optimize,
     });
+    const expat_dep = b.dependency("expat", .{ .target = target, .optimize = optimize });
+    const zlib_dep = b.dependency("zlib", .{ .target = target, .optimize = optimize });
 
     const lib = b.addLibrary(.{
-        .name = "sqlite3",
+        .name = "readosm",
         .linkage = .static,
         .root_module = b.createModule(.{
             .target = target,
@@ -19,6 +23,11 @@ pub fn create(
             .link_libc = true,
         }),
     });
+
+    lib.root_module.linkLibrary(lib_expat);
+    lib.root_module.linkLibrary(lib_zlib);
+    lib.root_module.addIncludePath(expat_dep.path("lib"));
+    lib.root_module.addIncludePath(zlib_dep.path(""));
 
     lib.root_module.addCSourceFiles(.{
         .root = readosm_dep.path("src"),
@@ -28,6 +37,7 @@ pub fn create(
             "osmxml.c",
             "osm_objects.c",
         },
+        .flags = &.{"-DXML_STATIC"},
     });
 
     const config_h = b.addConfigHeader(.{

@@ -7,7 +7,8 @@ fn usage() void {
 
 pub fn main(init: std.process.Init) !void {
     var options: zillconv.Options = .{};
-    var args = init.minimal.args.iterate();
+    var args = try init.minimal.args.iterateAllocator(init.gpa);
+    defer args.deinit();
     _ = args.next(); // program name
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {

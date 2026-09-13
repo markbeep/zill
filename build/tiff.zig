@@ -4,8 +4,11 @@ pub fn create(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    lib_zlib: *std.Build.Step.Compile,
 ) *std.Build.Step.Compile {
     const tiff_dep = b.dependency("libtiff", .{ .target = target, .optimize = optimize });
+    const zlib_dep = b.dependency("zlib", .{ .target = target, .optimize = optimize });
+    const is_windows = target.result.os.tag == .windows;
 
     const lib = b.addLibrary(.{
         .name = "tiff",
@@ -16,6 +19,9 @@ pub fn create(
             .link_libc = true,
         }),
     });
+
+    lib.root_module.addIncludePath(zlib_dep.path(""));
+    lib.root_module.linkLibrary(lib_zlib);
 
     lib.root_module.addCSourceFiles(.{
         .root = tiff_dep.path("libtiff"),
@@ -49,12 +55,18 @@ pub fn create(
             "tif_swab.c",
             "tif_thunder.c",
             "tif_tile.c",
-            "tif_unix.c",
             "tif_version.c",
             "tif_warning.c",
             "tif_write.c",
             "tif_zip.c",
         },
+        .flags = &.{"-DTIFF_DISABLE_DEPRECATED"},
+    });
+
+    const platform_io: []const []const u8 = if (is_windows) &.{"tif_win32.c"} else &.{"tif_unix.c"};
+    lib.root_module.addCSourceFiles(.{
+        .root = tiff_dep.path("libtiff"),
+        .files = platform_io,
         .flags = &.{"-DTIFF_DISABLE_DEPRECATED"},
     });
 
