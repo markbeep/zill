@@ -139,26 +139,151 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
         /// `prev` value of a node that has no predecessor yet.
         const no_prev = std.math.maxInt(u32);
 
-        /// Per-node search state, indexed by node index. The array is handed out
-        /// uninitialised, so a slot only holds a real state when its `stamp`
-        /// matches the generation of the current search. `distance` is stored as
-        /// `u32`: it is either bounded by `end_condition.max_distance` or, in the
-        /// `at_least_elevation` case, by the diameter of the graph, which is far
-        /// below 4_294_967_295 m for any real network.
-        const NodeState = struct {
+        /// Search state of one node. `key` says which node the slot holds;
+        /// `key == empty_key` marks a free slot. The table is handed out
+        /// uninitialised, so every free slot is written before the first probe:
+        /// without that, a slot left over from an earlier search could look like
+        /// a state for the node being probed.
+        const Slot = struct {
             distance: u32,
             elevation: i32,
             prev: u32,
-            stamp: u32,
+            key: u32,
         };
 
-        const Search = struct {
-            states: []NodeState,
-            generation: u32,
+        /// Map from node index to the best state found for it so far. An
+        /// open-addressing table (load factor <= 0.5) rather than an array
+        /// indexed by node index: consecutive node indices are scattered over the
+        /// country, so a dense array would touch tens of thousands of pages for a
+        /// search that visits a few thousand nodes, and the resulting cache and
+        /// TLB misses dominate the search.
+        ///
+        /// `distance` is stored as `u32`: it is either bounded by
+        /// `end_condition.max_distance` or, for `at_least_elevation`, by the
+        /// diameter of the graph, which is far below 4_294_967_295 m.
+        const StateTable = struct {
+            slots: []Slot,
+            empty_key: u32,
+            count: usize,
+            mask: usize,
+            shift: u5,
 
-            fn find(search: *const Search, node_idx: u32) ?*const NodeState {
-                const state = &search.states[node_idx];
-                return if (state.stamp == search.generation) state else null;
+            const initial_capacity = 4096;
+
+            fn init(allocator: std.mem.Allocator, empty_key: u32) !StateTable {
+                const slots = try allocator.alloc(Slot, initial_capacity);
+                var table = StateTable{
+                    .slots = slots,
+                    .empty_key = empty_key,
+                    .count = 0,
+                    .mask = initial_capacity - 1,
+                    .shift = @intCast(32 - std.math.log2_int(usize, initial_capacity)),
+                };
+                table.markEmpty();
+                return table;
+            }
+
+            /// Marks every slot as free. A slot keeps this mark until this search
+            /// writes it, which is what lets a probe tell "free" apart from
+            /// "occupied by another key" without initialising the state fields.
+            fn markEmpty(table: *StateTable) void {
+                for (table.slots) |*slot| slot.key = table.empty_key;
+            }
+
+            fn slotIndex(table: *const StateTable, node_idx: u32) usize {
+                return @as(usize, (node_idx *% 0x9e37_79b1) >> table.shift);
+            }
+
+            fn find(table: *const StateTable, node_idx: u32) ?*Slot {
+                var i = table.slotIndex(node_idx);
+                while (true) {
+                    const slot = &table.slots[i];
+                    if (slot.key == table.empty_key) return null;
+                    if (slot.key == node_idx) return slot;
+                    i = (i + 1) & table.mask;
+                }
+            }
+
+            fn put(
+                table: *StateTable,
+                allocator: std.mem.Allocator,
+                node_idx: u32,
+                distance: u32,
+                elevation: i32,
+                prev: u32,
+            ) !void {
+                if (table.count * 2 >= table.slots.len) try table.grow(allocator);
+
+                var i = table.slotIndex(node_idx);
+                while (true) {
+                    const slot = &table.slots[i];
+                    if (slot.key == table.empty_key or slot.key == node_idx) {
+                        if (slot.key == table.empty_key) table.count += 1;
+                        slot.* = .{
+                            .distance = distance,
+                            .elevation = elevation,
+                            .prev = prev,
+                            .key = node_idx,
+                        };
+                        return;
+                    }
+                    i = (i + 1) & table.mask;
+                }
+            }
+
+            /// Relaxes `node_idx` to `distance` in a single probe: writes the
+            /// state unless the slot already holds a distance that is at most
+            /// `distance`. Returns that distance when the state was written, null
+            /// when the new one is no better.
+            fn relax(
+                table: *StateTable,
+                allocator: std.mem.Allocator,
+                node_idx: u32,
+                distance: u32,
+                elevation: i32,
+                prev: u32,
+            ) !?u32 {
+                if (table.count * 2 >= table.slots.len) try table.grow(allocator);
+
+                var i = table.slotIndex(node_idx);
+                while (true) {
+                    const slot = &table.slots[i];
+                    if (slot.key == table.empty_key) {
+                        slot.* = .{
+                            .distance = distance,
+                            .elevation = elevation,
+                            .prev = prev,
+                            .key = node_idx,
+                        };
+                        table.count += 1;
+                        return distance;
+                    }
+                    if (slot.key == node_idx) {
+                        if (distance >= slot.distance) return null;
+                        slot.distance = distance;
+                        slot.elevation = elevation;
+                        slot.prev = prev;
+                        return distance;
+                    }
+                    i = (i + 1) & table.mask;
+                }
+            }
+
+            fn grow(table: *StateTable, allocator: std.mem.Allocator) !void {
+                const old_slots = table.slots;
+                table.slots = try allocator.alloc(Slot, old_slots.len * 2);
+                table.mask = table.slots.len - 1;
+                table.shift = @intCast(32 - std.math.log2_int(usize, table.slots.len));
+                table.markEmpty();
+                table.count = 0;
+
+                for (old_slots) |slot| {
+                    if (slot.key == table.empty_key) continue;
+                    var i = table.slotIndex(slot.key);
+                    while (table.slots[i].key != table.empty_key) i = (i + 1) & table.mask;
+                    table.slots[i] = slot;
+                    table.count += 1;
+                }
             }
         };
 
@@ -168,9 +293,103 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
         const Entry = struct {
             distance: u32,
             idx: u32,
+        };
 
-            fn compareForDistance(_: void, a: Entry, b: Entry) std.math.Order {
-                return std.math.order(a.distance, b.distance);
+        /// Nodes waiting to be expanded, ordered by distance.
+        ///
+        /// Distances are whole metres and the queue only ever pops the smallest
+        /// distance present, so one bucket per metre is enough: pushing and
+        /// popping are O(1) and walk memory in order, where a comparison heap
+        /// costs a sift of logarithmic depth on every operation. Entries of the
+        /// same distance form a chain; `heads[i] + 1` is the newest chain entry
+        /// of bucket `i`, zero meaning empty. The bucket window grows (and the
+        /// pending entries are re-bucketed) when a queued distance would fall
+        /// outside it, which keeps the queue correct for searches without a
+        /// distance bound.
+        const Queue = struct {
+            heads: []u32,
+            entries: std.ArrayList(Window),
+            count: usize,
+            current: u64,
+            mask: u32,
+
+            const Window = struct {
+                distance: u32,
+                idx: u32,
+                next: u32,
+            };
+
+            const initial_buckets = 256;
+
+            fn init(allocator: std.mem.Allocator) !Queue {
+                const heads = try allocator.alloc(u32, initial_buckets);
+                @memset(heads, 0);
+                return .{
+                    .heads = heads,
+                    .entries = .empty,
+                    .count = 0,
+                    .current = 0,
+                    .mask = initial_buckets - 1,
+                };
+            }
+
+            fn push(queue: *Queue, allocator: std.mem.Allocator, distance: u32, idx: u32) !void {
+                if (@as(u64, distance) - queue.current >= queue.heads.len) {
+                    try queue.grow(allocator, @as(u64, distance) - queue.current);
+                }
+
+                const bucket = @as(u32, @intCast(@as(u64, distance) & queue.mask));
+                const index: u32 = @intCast(queue.entries.items.len);
+                try queue.entries.append(allocator, .{
+                    .distance = distance,
+                    .idx = idx,
+                    .next = queue.heads[bucket],
+                });
+                queue.heads[bucket] = index + 1;
+                queue.count += 1;
+            }
+
+            fn pop(queue: *Queue) ?Entry {
+                while (queue.count > 0) {
+                    const bucket = @as(u32, @intCast(queue.current & queue.mask));
+                    const head = queue.heads[bucket];
+                    if (head == 0) {
+                        queue.current += 1;
+                        continue;
+                    }
+                    const entry = queue.entries.items[head - 1];
+                    queue.heads[bucket] = entry.next;
+                    queue.count -= 1;
+                    return .{ .distance = entry.distance, .idx = entry.idx };
+                }
+                return null;
+            }
+
+            /// Widens the window to hold a distance `needed` past the current
+            /// position, moving the pending entries into their new buckets.
+            fn grow(queue: *Queue, allocator: std.mem.Allocator, needed: u64) !void {
+                const old_heads = queue.heads;
+                const old_mask = queue.mask;
+
+                var len: usize = old_heads.len;
+                while (len <= needed) len *= 2;
+                const heads = try allocator.alloc(u32, len);
+                @memset(heads, 0);
+                queue.heads = heads;
+                queue.mask = @intCast(len - 1);
+
+                var bucket: u64 = queue.current;
+                const end = queue.current + old_heads.len;
+                while (bucket < end) : (bucket += 1) {
+                    var index = old_heads[@as(u32, @intCast(bucket & old_mask))];
+                    while (index != 0) {
+                        const next = queue.entries.items[index - 1].next;
+                        const target = @as(u32, @intCast(queue.entries.items[index - 1].distance & queue.mask));
+                        queue.entries.items[index - 1].next = queue.heads[target];
+                        queue.heads[target] = index;
+                        index = next;
+                    }
+                }
             }
         };
 
@@ -184,31 +403,29 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
 
-            const generation = nextSearchGeneration();
-            var search = Search{
-                .states = try arena.allocator().alloc(NodeState, outgoing.len),
-                .generation = generation,
-            };
+            var table = try StateTable.init(arena.allocator(), @intCast(outgoing.len));
 
-            const initial = NodeState{
+            const initial = Slot{
                 .distance = 0,
                 .elevation = 0,
                 .prev = no_prev,
-                .stamp = generation,
+                .key = start_idx,
             };
-            search.states[start_idx] = initial;
+            try table.put(arena.allocator(), start_idx, initial.distance, initial.elevation, initial.prev);
             var best = initial;
             var best_idx: u32 = start_idx;
 
-            var pq = std.PriorityQueue(Entry, void, Entry.compareForDistance).initContext({});
-            try pq.push(arena.allocator(), .{ .distance = 0, .idx = start_idx });
+            var queue = try Queue.init(arena.allocator());
+            try queue.push(arena.allocator(), 0, start_idx);
 
-            while (pq.pop()) |entry| {
+            while (queue.pop()) |entry| {
                 const current_idx = entry.idx;
-                const u = search.find(current_idx) orelse unreachable;
-                if (entry.distance != u.distance) continue;
+                const current = table.find(current_idx) orelse unreachable;
+                if (entry.distance != current.distance) continue;
+                // Copied because inserting into the table can move the slots.
+                const u = current.*;
                 if (end_condition == .at_least_elevation and u.elevation >= end_condition.at_least_elevation) {
-                    best = u.*;
+                    best = u;
                     best_idx = current_idx;
                     break;
                 }
@@ -222,21 +439,23 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                         continue;
                     }
 
-                    if (search.find(edge.v_idx)) |v| {
-                        if (new_distance >= v.distance) continue;
-                    }
-
                     std.debug.assert(new_distance <= std.math.maxInt(u32));
-                    search.states[edge.v_idx] = .{
-                        .distance = @intCast(new_distance),
-                        .elevation = new_elevation,
-                        .prev = edge.u_idx,
-                        .stamp = generation,
-                    };
-                    try pq.push(arena.allocator(), .{ .distance = @intCast(new_distance), .idx = edge.v_idx });
+                    const stored_distance = try table.relax(
+                        arena.allocator(),
+                        edge.v_idx,
+                        @intCast(new_distance),
+                        new_elevation,
+                        edge.u_idx,
+                    ) orelse continue;
+                    try queue.push(arena.allocator(), stored_distance, edge.v_idx);
 
                     if (new_elevation > best.elevation) {
-                        best = search.states[edge.v_idx];
+                        best = .{
+                            .distance = stored_distance,
+                            .elevation = new_elevation,
+                            .prev = edge.u_idx,
+                            .key = edge.v_idx,
+                        };
                         best_idx = edge.v_idx;
                     }
                 }
@@ -252,7 +471,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                     while (current.prev != no_prev) {
                         const prev = current.prev;
                         try path.append(allocator, prev);
-                        current = (search.find(prev) orelse unreachable).*;
+                        current = (table.find(prev) orelse unreachable).*;
                     }
 
                     const owned = try path.toOwnedSlice(allocator);
@@ -264,15 +483,6 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
     };
 }
 
-/// Generation tag handed out to every search, shared by both `Dijkstra`
-/// instantiations so that recycled memory can never look like a fresh state.
-/// Zero is skipped: memory that was never written reads as zero.
-var search_generation = std.atomic.Value(u32).init(0x9e37_79b9);
-
-fn nextSearchGeneration() u32 {
-    const generation = search_generation.fetchAdd(1, .monotonic) +% 1;
-    return if (generation == 0) 1 else generation;
-}
 
 pub const PathDetails = struct {
     indices: []u32,
