@@ -42,7 +42,11 @@ cd "$(dirname "$0")"
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
-if ! zig build -Doptimize=ReleaseFast test -- --test-filter "solve" >"$log" 2>&1; then
+# `install` is part of the gate so that src/main.zig (the `zill` executable, a
+# separate root module that `test` alone never compiles) cannot be left broken.
+# Note: Zig 0.16 does not forward `--` arguments to the test step here, so the
+# filter is ignored and the whole suite runs - which is what we want anyway.
+if ! zig build -Doptimize=ReleaseFast test install -- --test-filter "solve" >"$log" 2>&1; then
     cat "$log"
     echo "autoresearch: test suite failed" >&2
     exit 1
