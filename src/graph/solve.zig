@@ -136,6 +136,36 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
     };
 
     return struct {
+        /// `prev` value of a node that has no predecessor yet.
+        const no_prev = std.math.maxInt(u32);
+
+        /// Per-node search state, indexed by node index. The array is handed out
+        /// uninitialised, so a slot only holds a real state when its `stamp`
+        /// matches the generation of the current search. `distance` is stored as
+        /// `u32`: it is either bounded by `end_condition.max_distance` or, in the
+        /// `at_least_elevation` case, by the diameter of the graph, which is far
+        /// below 4_294_967_295 m for any real network.
+        const NodeState = struct {
+            distance: u32,
+            elevation: i32,
+            prev: u32,
+            stamp: u32,
+        };
+
+        const Search = struct {
+            states: []NodeState,
+            generation: u32,
+
+            fn find(search: *const Search, node_idx: u32) ?*const NodeState {
+                const state = &search.states[node_idx];
+                return if (state.stamp == search.generation) state else null;
+            }
+
+            fn compareForDistance(search: *const Search, u_idx: u32, v_idx: u32) std.math.Order {
+                return std.math.order(search.states[u_idx].distance, search.states[v_idx].distance);
+            }
+        };
+
         pub fn run(
             allocator: std.mem.Allocator,
             start_idx: u32,
@@ -143,61 +173,61 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             edges: []const s.Edge,
             outgoing: []std.ArrayList(u32),
         ) !ReturnType {
-            const VisitedNode = struct {
-                idx: u32,
-                distance: i64,
-                elevation: i32,
-                prev: ?u32,
-
-                fn compareForDistance(visited: *const std.AutoHashMap(u32, @This()), u_idx: u32, v_idx: u32) std.math.Order {
-                    const u = visited.get(u_idx) orelse unreachable;
-                    const v = visited.get(v_idx) orelse unreachable;
-                    return std.math.order(u.distance, v.distance);
-                }
-            };
-
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
 
-            var visited = std.AutoHashMap(u32, VisitedNode).init(arena.allocator());
-            const initial = VisitedNode{ .idx = start_idx, .distance = 0, .elevation = 0, .prev = null };
-            try visited.put(start_idx, initial);
-            var best: VisitedNode = initial;
+            const generation = nextSearchGeneration();
+            var search = Search{
+                .states = try arena.allocator().alloc(NodeState, outgoing.len),
+                .generation = generation,
+            };
 
-            var pq = std.PriorityQueue(u32, *const std.AutoHashMap(u32, VisitedNode), VisitedNode.compareForDistance).initContext(&visited);
+            const initial = NodeState{
+                .distance = 0,
+                .elevation = 0,
+                .prev = no_prev,
+                .stamp = generation,
+            };
+            search.states[start_idx] = initial;
+            var best = initial;
+            var best_idx: u32 = start_idx;
+
+            var pq = std.PriorityQueue(u32, *const Search, Search.compareForDistance).initContext(&search);
             try pq.push(arena.allocator(), start_idx);
 
             while (pq.pop()) |current_idx| {
-                const u = visited.get(current_idx) orelse unreachable;
+                const u = search.find(current_idx) orelse unreachable;
                 if (end_condition == .at_least_elevation and u.elevation >= end_condition.at_least_elevation) {
-                    best = u;
+                    best = u.*;
+                    best_idx = current_idx;
                     break;
                 }
 
                 for (outgoing[current_idx].items) |outgoing_edge_idx| {
                     const edge = edges[outgoing_edge_idx];
-                    const new_distance = u.distance + edge.distance;
-                    const new_elevation = u.elevation + edge.elev_gain - edge.elev_loss;
+                    const new_distance = @as(u64, u.distance) + edge.distance;
+                    const new_elevation = u.elevation + @as(i32, edge.elev_gain) - @as(i32, edge.elev_loss);
 
                     if (end_condition == .max_distance and new_distance > end_condition.max_distance) {
                         continue;
                     }
 
-                    if (visited.get(edge.v_idx)) |v| {
+                    if (search.find(edge.v_idx)) |v| {
                         if (new_distance >= v.distance) continue;
                     }
 
-                    const new_visited = VisitedNode{
-                        .idx = edge.v_idx,
-                        .distance = new_distance,
+                    std.debug.assert(new_distance <= std.math.maxInt(u32));
+                    search.states[edge.v_idx] = .{
+                        .distance = @intCast(new_distance),
                         .elevation = new_elevation,
                         .prev = edge.u_idx,
+                        .stamp = generation,
                     };
-                    try visited.put(edge.v_idx, new_visited);
                     try pq.push(arena.allocator(), edge.v_idx);
 
                     if (new_elevation > best.elevation) {
-                        best = new_visited;
+                        best = search.states[edge.v_idx];
+                        best_idx = edge.v_idx;
                     }
                 }
             }
@@ -207,11 +237,12 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                 .Path => {
                     // Non-arena allocator
                     var path = std.ArrayList(u32).empty;
-                    try path.append(allocator, best.idx);
+                    try path.append(allocator, best_idx);
                     var current = best;
-                    while (current.prev) |prev| {
+                    while (current.prev != no_prev) {
+                        const prev = current.prev;
                         try path.append(allocator, prev);
-                        current = visited.get(prev) orelse unreachable;
+                        current = (search.find(prev) orelse unreachable).*;
                     }
 
                     const owned = try path.toOwnedSlice(allocator);
@@ -221,6 +252,16 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             }
         }
     };
+}
+
+/// Generation tag handed out to every search, shared by both `Dijkstra`
+/// instantiations so that recycled memory can never look like a fresh state.
+/// Zero is skipped: memory that was never written reads as zero.
+var search_generation = std.atomic.Value(u32).init(0x9e37_79b9);
+
+fn nextSearchGeneration() u32 {
+    const generation = search_generation.fetchAdd(1, .monotonic) +% 1;
+    return if (generation == 0) 1 else generation;
 }
 
 pub const PathDetails = struct {
