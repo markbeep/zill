@@ -139,17 +139,34 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
         /// `prev` value of a node that has no predecessor yet.
         const no_prev = std.math.maxInt(u32);
 
+        /// `Path` searches need every settled node's predecessor to rebuild the
+        /// route; an `Elevation` search never reads it, so its slots leave the
+        /// field out and the table stays a quarter denser in cache.
+        const needs_prev = dtype == .Path;
+
         /// Search state of one node. `key` says which node the slot holds;
         /// `key == empty_key` marks a free slot. The table is handed out
         /// uninitialised, so every free slot is written before the first probe:
         /// without that, a slot left over from an earlier search could look like
         /// a state for the node being probed.
-        const Slot = struct {
+        const Slot = if (needs_prev) struct {
             distance: u32,
             elevation: i32,
             prev: u32,
             key: u32,
+        } else struct {
+            distance: u32,
+            elevation: i32,
+            key: u32,
         };
+
+        fn makeSlot(distance: u32, elevation: i32, prev: u32, key: u32) Slot {
+            if (comptime needs_prev) {
+                return .{ .distance = distance, .elevation = elevation, .prev = prev, .key = key };
+            } else {
+                return .{ .distance = distance, .elevation = elevation, .key = key };
+            }
+        }
 
         /// Map from node index to the best state found for it so far. An
         /// open-addressing table (load factor <= 0.5) rather than an array
@@ -168,16 +185,32 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             mask: usize,
             shift: u5,
 
-            const initial_capacity = 4096;
+            const default_capacity = 4096;
+            const max_capacity = 1 << 17;
 
-            fn init(allocator: std.mem.Allocator, empty_key: u32) !StateTable {
-                const slots = try allocator.alloc(Slot, initial_capacity);
+            /// A search with a distance budget visits a number of nodes that
+            /// grows with the budget, so sizing the first table from it skips most
+            /// of the growth-and-rehash chain. Searches without a budget keep the
+            /// default.
+            fn capacityFor(end_condition: EndCondition) usize {
+                const budget = switch (end_condition) {
+                    .max_distance => |value| value,
+                    .at_least_elevation => return default_capacity,
+                };
+                const estimated = @as(u64, budget) * 8;
+                if (estimated <= default_capacity) return default_capacity;
+                if (estimated >= max_capacity) return max_capacity;
+                return std.math.ceilPowerOfTwoAssert(usize, @intCast(estimated));
+            }
+
+            fn init(allocator: std.mem.Allocator, empty_key: u32, capacity: usize) !StateTable {
+                const slots = try allocator.alloc(Slot, capacity);
                 var table = StateTable{
                     .slots = slots,
                     .empty_key = empty_key,
                     .count = 0,
-                    .mask = initial_capacity - 1,
-                    .shift = @intCast(32 - std.math.log2_int(usize, initial_capacity)),
+                    .mask = capacity - 1,
+                    .shift = @intCast(32 - std.math.log2_int(usize, capacity)),
                 };
                 table.markEmpty();
                 return table;
@@ -219,12 +252,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                     const slot = &table.slots[i];
                     if (slot.key == table.empty_key or slot.key == node_idx) {
                         if (slot.key == table.empty_key) table.count += 1;
-                        slot.* = .{
-                            .distance = distance,
-                            .elevation = elevation,
-                            .prev = prev,
-                            .key = node_idx,
-                        };
+                        slot.* = makeSlot(distance, elevation, prev, node_idx);
                         return;
                     }
                     i = (i + 1) & table.mask;
@@ -249,12 +277,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                 while (true) {
                     const slot = &table.slots[i];
                     if (slot.key == table.empty_key) {
-                        slot.* = .{
-                            .distance = distance,
-                            .elevation = elevation,
-                            .prev = prev,
-                            .key = node_idx,
-                        };
+                        slot.* = makeSlot(distance, elevation, prev, node_idx);
                         table.count += 1;
                         return distance;
                     }
@@ -262,7 +285,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                         if (distance >= slot.distance) return null;
                         slot.distance = distance;
                         slot.elevation = elevation;
-                        slot.prev = prev;
+                        if (comptime needs_prev) slot.prev = prev;
                         return distance;
                     }
                     i = (i + 1) & table.mask;
@@ -403,15 +426,14 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
 
-            var table = try StateTable.init(arena.allocator(), @intCast(outgoing.len));
+            var table = try StateTable.init(
+                arena.allocator(),
+                @intCast(outgoing.len),
+                StateTable.capacityFor(end_condition),
+            );
 
-            const initial = Slot{
-                .distance = 0,
-                .elevation = 0,
-                .prev = no_prev,
-                .key = start_idx,
-            };
-            try table.put(arena.allocator(), start_idx, initial.distance, initial.elevation, initial.prev);
+            const initial = makeSlot(0, 0, no_prev, start_idx);
+            try table.put(arena.allocator(), start_idx, initial.distance, initial.elevation, no_prev);
             var best = initial;
             var best_idx: u32 = start_idx;
 
@@ -450,12 +472,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                     try queue.push(arena.allocator(), stored_distance, edge.v_idx);
 
                     if (new_elevation > best.elevation) {
-                        best = .{
-                            .distance = stored_distance,
-                            .elevation = new_elevation,
-                            .prev = edge.u_idx,
-                            .key = edge.v_idx,
-                        };
+                        best = makeSlot(stored_distance, new_elevation, edge.u_idx, edge.v_idx);
                         best_idx = edge.v_idx;
                     }
                 }
