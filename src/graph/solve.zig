@@ -637,6 +637,32 @@ test "solve: dijkstra from a node without edges" {
     try testing.expectEqual(@as(i64, 0), path.distance);
 }
 
+test "solve: dijkstra grows the queue window" {
+    const testing = std.testing;
+    // A chain long enough that queued distances outgrow the queue's initial
+    // bucket window several times, in both end conditions.
+    const node_count = 1024;
+    var g = try TestGraph.init(testing.allocator, node_count);
+    defer g.deinit(testing.allocator);
+    // Node i -> i+1 is 37 m of walking and climbs 3 m, so the far end of the
+    // chain is 37_851 m and 3_069 m up.
+    for (0..node_count - 1) |i| {
+        try g.connect(testing.allocator, @intCast(i), @intCast(i + 1), 3, 0, 37);
+    }
+
+    try testing.expectEqual(@as(i64, 3069), try g.elevation(testing.allocator, 0, .{ .max_distance = 40_000 }));
+
+    const path = try g.path(testing.allocator, 0, .{ .max_distance = 40_000 });
+    defer testing.allocator.free(path.indices);
+    try testing.expectEqual(@as(usize, node_count), path.indices.len);
+    try testing.expectEqual(@as(i64, 1023 * 37), path.distance);
+    try testing.expectEqual(@as(i32, 1023 * 3), path.elevation);
+
+    // Same graph with an elevation target and no distance bound: the first node
+    // above the target is the one that has climbed exactly 3000 m.
+    try testing.expectEqual(@as(i64, 3000), try g.elevation(testing.allocator, 0, .{ .at_least_elevation = 3000 }));
+}
+
 test "solve: dijkstra is deterministic" {
     const testing = std.testing;
     const node_count: u32 = 512;
