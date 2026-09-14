@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const s = @import("shared.zig");
 const graph = @import("graph.zig");
 
@@ -228,6 +229,208 @@ pub const PathDetails = struct {
     elevation: i32,
 };
 
+// ======================================== Tests ========================================
+
+/// Minimal in-memory graph builder for the tests. Edges are laid out exactly the
+/// way `DynamicGraph.fromReader` lays them out: one directed record per
+/// direction, plus a per-node list of outgoing edge indices.
+const TestGraph = struct {
+    node_count: usize,
+    edges: std.ArrayList(s.Edge),
+    outgoing: std.ArrayList(std.ArrayList(u32)),
+
+    fn init(allocator: std.mem.Allocator, node_count: usize) !TestGraph {
+        var self = TestGraph{
+            .node_count = node_count,
+            .edges = .empty,
+            .outgoing = .empty,
+        };
+        try self.outgoing.ensureTotalCapacity(allocator, node_count);
+        for (0..node_count) |_| try self.outgoing.append(allocator, .empty);
+        return self;
+    }
+
+    fn deinit(self: *TestGraph, allocator: std.mem.Allocator) void {
+        for (self.outgoing.items) |*node_edges| node_edges.deinit(allocator);
+        self.outgoing.deinit(allocator);
+        self.edges.deinit(allocator);
+    }
+
+    /// Adds an edge that can be walked in both directions.
+    fn connect(self: *TestGraph, allocator: std.mem.Allocator, u: u32, v: u32, gain: u16, loss: u16, distance: u32) !void {
+        std.debug.assert(u < self.node_count and v < self.node_count);
+        try self.addDirected(allocator, u, v, gain, loss, distance);
+        try self.addDirected(allocator, v, u, loss, gain, distance);
+    }
+
+    fn addDirected(self: *TestGraph, allocator: std.mem.Allocator, u: u32, v: u32, gain: u16, loss: u16, distance: u32) !void {
+        const edge_idx: u32 = @intCast(self.edges.items.len);
+        try self.edges.append(allocator, .{
+            .u_idx = u,
+            .v_idx = v,
+            .elev_gain = gain,
+            .elev_loss = loss,
+            .distance = distance,
+        });
+        try self.outgoing.items[u].append(allocator, edge_idx);
+    }
+
+    fn elevation(self: *TestGraph, allocator: std.mem.Allocator, start: u32, end_condition: EndCondition) !i64 {
+        return Dijkstra(.Elevation).run(allocator, start, end_condition, self.edges.items, self.outgoing.items);
+    }
+
+    fn path(self: *TestGraph, allocator: std.mem.Allocator, start: u32, end_condition: EndCondition) !PathDetails {
+        return Dijkstra(.Path).run(allocator, start, end_condition, self.edges.items, self.outgoing.items);
+    }
+};
+
+test "solve: dijkstra honours the distance limit" {
+    const testing = std.testing;
+    var g = try TestGraph.init(testing.allocator, 4);
+    defer g.deinit(testing.allocator);
+    // 0 <-> 1 <-> 2 <-> 3, 100 m per hop, climbing 10 m, 20 m and 5 m.
+    try g.connect(testing.allocator, 0, 1, 10, 0, 100);
+    try g.connect(testing.allocator, 1, 2, 20, 0, 100);
+    try g.connect(testing.allocator, 2, 3, 5, 0, 100);
+
+    // 50 m only reaches the start node itself.
+    try testing.expectEqual(@as(i64, 0), try g.elevation(testing.allocator, 0, .{ .max_distance = 50 }));
+
+    // 250 m reaches node 2 (200 m) but not node 3 (300 m).
+    try testing.expectEqual(@as(i64, 30), try g.elevation(testing.allocator, 0, .{ .max_distance = 250 }));
+
+    const path = try g.path(testing.allocator, 0, .{ .max_distance = 250 });
+    defer testing.allocator.free(path.indices);
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 2 }, path.indices);
+    try testing.expectEqual(@as(i64, 200), path.distance);
+    try testing.expectEqual(@as(i32, 30), path.elevation);
+
+    // An edge that lands exactly on the limit can still be walked.
+    try testing.expectEqual(@as(i64, 35), try g.elevation(testing.allocator, 0, .{ .max_distance = 300 }));
+}
+
+test "solve: dijkstra never reports an elevation below the start" {
+    const testing = std.testing;
+    var g = try TestGraph.init(testing.allocator, 2);
+    defer g.deinit(testing.allocator);
+    // Walking to node 1 descends 50 m.
+    try g.connect(testing.allocator, 0, 1, 0, 50, 100);
+
+    try testing.expectEqual(@as(i64, 0), try g.elevation(testing.allocator, 0, .{ .max_distance = 1_000 }));
+
+    const path = try g.path(testing.allocator, 0, .{ .max_distance = 1_000 });
+    defer testing.allocator.free(path.indices);
+    try testing.expectEqualSlices(u32, &.{0}, path.indices);
+    try testing.expectEqual(@as(i64, 0), path.distance);
+    try testing.expectEqual(@as(i32, 0), path.elevation);
+}
+
+test "solve: dijkstra expands nodes with their best distance" {
+    const testing = std.testing;
+    var g = try TestGraph.init(testing.allocator, 4);
+    defer g.deinit(testing.allocator);
+    // 0 -> 1 costs 20 m, 0 -> 2 -> 1 costs 15 m. Node 3 is only inside a 25 m
+    // budget if node 1 is expanded with the improved 15 m distance.
+    try g.connect(testing.allocator, 0, 1, 0, 0, 20);
+    try g.connect(testing.allocator, 0, 2, 0, 0, 10);
+    try g.connect(testing.allocator, 2, 1, 0, 0, 5);
+    try g.connect(testing.allocator, 1, 3, 100, 0, 10);
+
+    try testing.expectEqual(@as(i64, 100), try g.elevation(testing.allocator, 0, .{ .max_distance = 25 }));
+
+    const path = try g.path(testing.allocator, 0, .{ .max_distance = 25 });
+    defer testing.allocator.free(path.indices);
+    try testing.expectEqualSlices(u32, &.{ 0, 2, 1, 3 }, path.indices);
+    try testing.expectEqual(@as(i64, 25), path.distance);
+    try testing.expectEqual(@as(i32, 100), path.elevation);
+}
+
+test "solve: dijkstra stops at the first node above the elevation target" {
+    const testing = std.testing;
+    var g = try TestGraph.init(testing.allocator, 4);
+    defer g.deinit(testing.allocator);
+    try g.connect(testing.allocator, 0, 1, 10, 0, 100);
+    try g.connect(testing.allocator, 1, 2, 20, 0, 100);
+    try g.connect(testing.allocator, 2, 3, 5, 0, 100);
+
+    try testing.expectEqual(@as(i64, 30), try g.elevation(testing.allocator, 0, .{ .at_least_elevation = 25 }));
+
+    const path = try g.path(testing.allocator, 0, .{ .at_least_elevation = 25 });
+    defer testing.allocator.free(path.indices);
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 2 }, path.indices);
+    try testing.expectEqual(@as(i64, 200), path.distance);
+    try testing.expectEqual(@as(i32, 30), path.elevation);
+}
+
+test "solve: dijkstra from a node without edges" {
+    const testing = std.testing;
+    var g = try TestGraph.init(testing.allocator, 3);
+    defer g.deinit(testing.allocator);
+    try g.connect(testing.allocator, 1, 2, 50, 0, 100);
+
+    try testing.expectEqual(@as(i64, 0), try g.elevation(testing.allocator, 0, .{ .max_distance = 1_000 }));
+
+    const path = try g.path(testing.allocator, 0, .{ .max_distance = 1_000 });
+    defer testing.allocator.free(path.indices);
+    try testing.expectEqualSlices(u32, &.{0}, path.indices);
+    try testing.expectEqual(@as(i64, 0), path.distance);
+}
+
+test "solve: dijkstra is deterministic" {
+    const testing = std.testing;
+    const node_count: u32 = 512;
+    var g = try TestGraph.init(testing.allocator, node_count);
+    defer g.deinit(testing.allocator);
+
+    var prng = std.Random.DefaultPrng.init(0x2117_4a11);
+    const rand = prng.random();
+
+    // A connected backbone plus pseudo-random shortcuts, so that the search has
+    // plenty of equally short alternatives for the queue to order.
+    for (0..node_count - 1) |i| {
+        try g.connect(
+            testing.allocator,
+            @intCast(i),
+            @intCast(i + 1),
+            rand.intRangeAtMost(u16, 0, 200),
+            rand.intRangeAtMost(u16, 0, 200),
+            rand.intRangeAtMost(u32, 10, 40),
+        );
+    }
+    for (0..node_count * 3) |_| {
+        const u = rand.intRangeLessThan(u32, 0, node_count);
+        const v = rand.intRangeLessThan(u32, 0, node_count);
+        if (u == v) continue;
+        try g.connect(
+            testing.allocator,
+            u,
+            v,
+            rand.intRangeAtMost(u16, 0, 200),
+            rand.intRangeAtMost(u16, 0, 200),
+            rand.intRangeAtMost(u32, 10, 400),
+        );
+    }
+
+    const start: u32 = 3;
+    const condition: EndCondition = .{ .max_distance = 2_000 };
+    const expected_elevation = try g.elevation(testing.allocator, start, condition);
+    const expected_path = try g.path(testing.allocator, start, condition);
+    defer testing.allocator.free(expected_path.indices);
+
+    // Both entry points optimise for the same thing.
+    try testing.expectEqual(@as(i64, expected_path.elevation), expected_elevation);
+
+    for (0..8) |_| {
+        try testing.expectEqual(expected_elevation, try g.elevation(testing.allocator, start, condition));
+
+        const path = try g.path(testing.allocator, start, condition);
+        defer testing.allocator.free(path.indices);
+        try testing.expectEqualSlices(u32, expected_path.indices, path.indices);
+        try testing.expectEqual(expected_path.distance, path.distance);
+        try testing.expectEqual(expected_path.elevation, path.elevation);
+    }
+}
+
 /// Computes great-circle distance between two coordinates in meters
 pub fn haversineMeters(p1: Coord, p2: Coord) f64 {
     const r_earth = 6_371_000.0; // Mean Earth radius in meters
@@ -331,12 +534,7 @@ test "benchmark distance dijkstra" {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
 
-    var f = try std.Io.Dir.cwd().openFile(testing.io, "data/switzerland_walkable.zl", .{ .mode = .read_only });
-    defer f.close(testing.io);
-
-    var buffer: [1024]u8 = undefined;
-    var reader = f.reader(testing.io, &buffer);
-    bench_g = try graph.DynamicGraph.fromReader(arena.allocator(), &reader.interface);
+    bench_g = try loadBenchGraph(arena.allocator(), testing.io);
 
     var bench = zbench.Benchmark.init(testing.allocator, .{});
     defer bench.deinit();
@@ -356,4 +554,297 @@ test "benchmark distance dijkstra" {
     try bench.add("Benchmark peak finder Dijkstra (new impl)", Bench2.run, .{ .track_allocations = true });
 
     try bench.run(testing.io, std.Io.File.stderr());
+}
+
+// =================== Deterministic benchmark ===================
+
+const bench_graph_path = "data/switzerland_walkable.zl";
+
+/// One-time graph load. The arena-backed allocator keeps the 190 MB parse
+/// quick; the debug `testing.allocator` makes it take tens of seconds.
+fn loadBenchGraph(allocator: std.mem.Allocator, io: std.Io) !graph.DynamicGraph {
+    const file = try std.Io.Dir.cwd().openFile(io, bench_graph_path, .{ .mode = .read_only });
+    defer file.close(io);
+
+    var buffer: [1 << 18]u8 = undefined;
+    var reader = file.reader(io, &buffer);
+    return graph.DynamicGraph.fromReader(allocator, &reader.interface);
+}
+
+/// Deterministic workload. Every knob is a comptime constant so that
+/// consecutive runs measure exactly the same work.
+const BenchWorkload = struct {
+    /// Short walk: the search stays in the neighbourhood of the start node.
+    const local_distance: u32 = 1_000;
+    const local_starts: usize = 128;
+    /// Long walk: the search spills over a large part of the graph.
+    const regional_distance: u32 = 10_000;
+    const regional_starts: usize = 8;
+    /// Timed repetitions per start node. Each start node contributes the median
+    /// of its repetitions, so one disturbed repetition cannot move the metric.
+    const repetitions: usize = 5;
+    /// Start nodes whose returned path is audited before measuring.
+    const audited_starts: usize = 4;
+};
+
+/// Allocator wrapper recording how many bytes the code under test asks for.
+/// The count is reset before every timed run.
+const CountingAllocator = struct {
+    parent: std.mem.Allocator,
+    bytes: usize = 0,
+
+    fn allocator(self: *CountingAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.bytes += len;
+        return self.parent.vtable.alloc(self.parent.ptr, len, alignment, ret_addr);
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        if (!self.parent.vtable.resize(self.parent.ptr, memory, alignment, new_len, ret_addr)) return false;
+        if (new_len > memory.len) self.bytes += new_len - memory.len;
+        return true;
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.parent.vtable.remap(self.parent.ptr, memory, alignment, new_len, ret_addr);
+        if (result != null and new_len > memory.len) self.bytes += new_len - memory.len;
+        return result;
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.parent.vtable.free(self.parent.ptr, memory, alignment, ret_addr);
+    }
+};
+
+const Timed = struct {
+    ns: u64,
+    elevation: i64,
+};
+
+fn runTimed(
+    comptime dtype: DijkstraReturn,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    start_idx: u32,
+    max_distance: u32,
+    g: *const graph.DynamicGraph,
+) !Timed {
+    const condition: EndCondition = .{ .max_distance = max_distance };
+    const begin = std.Io.Clock.awake.now(io).nanoseconds;
+    const elevation: i64 = switch (dtype) {
+        .Elevation => try Dijkstra(.Elevation).run(allocator, start_idx, condition, g.edges.items, g.node_edges.items),
+        .Path => blk: {
+            const details = try Dijkstra(.Path).run(allocator, start_idx, condition, g.edges.items, g.node_edges.items);
+            defer allocator.free(details.indices);
+            break :blk details.elevation;
+        },
+    };
+    const end = std.Io.Clock.awake.now(io).nanoseconds;
+    return .{ .ns = @intCast(end - begin), .elevation = elevation };
+}
+
+/// Picks `count` start nodes spread over the whole graph from a fixed seed.
+fn benchStarts(allocator: std.mem.Allocator, node_count: usize, count: usize, seed: u64) ![]u32 {
+    const starts = try allocator.alloc(u32, count);
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rand = prng.random();
+    for (starts) |*start| start.* = rand.intRangeLessThan(u32, 0, @intCast(node_count));
+    return starts;
+}
+
+/// Mean per-start cost in microseconds, taking the median of the repetitions of
+/// each start node before averaging.
+fn perOpUs(samples: []const u64, start_count: usize) f64 {
+    const reps = BenchWorkload.repetitions;
+    var sorted: [reps]u64 = undefined;
+    var total: u64 = 0;
+    for (0..start_count) |i| {
+        for (0..reps) |rep| sorted[rep] = samples[rep * start_count + i];
+        std.mem.sort(u64, &sorted, {}, std.sort.asc(u64));
+        total += sorted[reps / 2];
+    }
+    return @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(start_count * std.time.ns_per_us));
+}
+
+fn mixChecksum(acc: u32, elevation: i64) u32 {
+    const bits: u32 = @truncate(@as(u64, @bitCast(elevation)));
+    return acc *% 0x0100_0193 ^ bits;
+}
+
+fn findEdge(g: *const graph.DynamicGraph, u: u32, v: u32) ?s.Edge {
+    for (g.node_edges.items[u].items) |edge_idx| {
+        const edge = g.edges.items[edge_idx];
+        if (edge.v_idx == v) return edge;
+    }
+    return null;
+}
+
+const PathAudit = struct {
+    distance_mismatches: u32 = 0,
+    elevation_mismatches: u32 = 0,
+};
+
+/// Audits a returned path against the graph: every hop must be a real edge and
+/// the walk must fit the budget. The reported totals come from the relaxation
+/// that produced the best node, while the indices are rebuilt from the final
+/// search state, so disagreements are counted rather than asserted: they mean
+/// the reported totals describe a walk that is no longer the one returned.
+fn auditPath(
+    allocator: std.mem.Allocator,
+    g: *const graph.DynamicGraph,
+    start_idx: u32,
+    max_distance: u32,
+) !PathAudit {
+    const testing = std.testing;
+    const condition: EndCondition = .{ .max_distance = max_distance };
+    const details = try Dijkstra(.Path).run(allocator, start_idx, condition, g.edges.items, g.node_edges.items);
+    defer allocator.free(details.indices);
+
+    try testing.expect(details.indices.len > 0);
+    try testing.expectEqual(start_idx, details.indices[0]);
+    try testing.expect(details.distance <= max_distance);
+
+    var walked_distance: u64 = 0;
+    var walked_elevation: i64 = 0;
+    for (details.indices[0 .. details.indices.len - 1], details.indices[1..]) |from, to| {
+        const edge = findEdge(g, from, to) orelse return error.PathNotConnected;
+        walked_distance += edge.distance;
+        walked_elevation += @as(i64, edge.elev_gain) - @as(i64, edge.elev_loss);
+    }
+
+    try testing.expect(walked_distance <= max_distance);
+
+    return .{
+        .distance_mismatches = @intFromBool(walked_distance != details.distance),
+        .elevation_mismatches = @intFromBool(walked_elevation != details.elevation),
+    };
+}
+
+const RegimeStats = struct {
+    peak_us: f64,
+    path_us: f64,
+    alloc_bytes: usize,
+    checksum: u32,
+    audit: PathAudit,
+
+    fn totalUs(stats: RegimeStats) f64 {
+        return stats.peak_us + stats.path_us;
+    }
+};
+
+/// Runs the same workload `repetitions` times over a fixed set of start nodes
+/// and reports per-run microseconds. Every repetition must produce bit-identical
+/// results, and the two entry points must agree on the elevation they return.
+fn measureRegime(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    g: *const graph.DynamicGraph,
+    starts: []const u32,
+    max_distance: u32,
+    counter: *CountingAllocator,
+) !RegimeStats {
+    const reps = BenchWorkload.repetitions;
+    const peak_ns = try allocator.alloc(u64, starts.len * reps);
+    defer allocator.free(peak_ns);
+    const path_ns = try allocator.alloc(u64, starts.len * reps);
+    defer allocator.free(path_ns);
+
+    var audit = PathAudit{};
+    for (starts[0..@min(BenchWorkload.audited_starts, starts.len)]) |start_idx| {
+        const result = try auditPath(allocator, g, start_idx, max_distance);
+        audit.distance_mismatches += result.distance_mismatches;
+        audit.elevation_mismatches += result.elevation_mismatches;
+    }
+
+    var alloc_bytes: usize = 0;
+    var checksum: u32 = 0;
+
+    for (0..reps) |rep| {
+        var repetition_checksum: u32 = 0;
+        for (starts, 0..) |start_idx, i| {
+            counter.bytes = 0;
+            const peak = try runTimed(.Elevation, allocator, io, start_idx, max_distance, g);
+            peak_ns[rep * starts.len + i] = peak.ns;
+            alloc_bytes = @max(alloc_bytes, counter.bytes);
+
+            counter.bytes = 0;
+            const path = try runTimed(.Path, allocator, io, start_idx, max_distance, g);
+            path_ns[rep * starts.len + i] = path.ns;
+            alloc_bytes = @max(alloc_bytes, counter.bytes);
+
+            try std.testing.expectEqual(peak.elevation, path.elevation);
+            repetition_checksum = mixChecksum(repetition_checksum, peak.elevation);
+            repetition_checksum = mixChecksum(repetition_checksum, path.elevation);
+        }
+
+        if (rep == 0) {
+            checksum = repetition_checksum;
+        } else {
+            try std.testing.expectEqual(checksum, repetition_checksum);
+        }
+    }
+
+    return .{
+        .peak_us = perOpUs(peak_ns, starts.len),
+        .path_us = perOpUs(path_ns, starts.len),
+        .alloc_bytes = alloc_bytes,
+        .checksum = checksum,
+        .audit = audit,
+    };
+}
+
+test "solve: benchmark dijkstra" {
+    // The workload is far too slow to be meaningful outside of a release build.
+    if (builtin.mode != .ReleaseFast and builtin.mode != .ReleaseSmall) return error.SkipZigTest;
+
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+
+    const g = try loadBenchGraph(arena.allocator(), io);
+
+    var counter = CountingAllocator{ .parent = std.heap.smp_allocator };
+    const allocator = counter.allocator();
+
+    const local_starts = try benchStarts(arena.allocator(), g.nodes.items.len, BenchWorkload.local_starts, 0x5eed_0001);
+    const regional_starts = try benchStarts(arena.allocator(), g.nodes.items.len, BenchWorkload.regional_starts, 0x5eed_0002);
+
+    const local = try measureRegime(allocator, io, &g, local_starts, BenchWorkload.local_distance, &counter);
+    const regional = try measureRegime(allocator, io, &g, regional_starts, BenchWorkload.regional_distance, &counter);
+
+    const local_us = local.totalUs();
+    const regional_us = regional.totalUs();
+    const distance_mismatches = local.audit.distance_mismatches + regional.audit.distance_mismatches;
+    const elevation_mismatches = local.audit.elevation_mismatches + regional.audit.elevation_mismatches;
+
+    // The leading newline keeps the first line separate from the test runner's
+    // progress line, which is written without a trailing newline.
+    std.debug.print("\nMETRIC dijkstra_local_peak_us={d:.3}\n", .{local.peak_us});
+    std.debug.print("METRIC dijkstra_local_path_us={d:.3}\n", .{local.path_us});
+    std.debug.print("METRIC dijkstra_regional_peak_us={d:.3}\n", .{regional.peak_us});
+    std.debug.print("METRIC dijkstra_regional_path_us={d:.3}\n", .{regional.path_us});
+    std.debug.print("METRIC dijkstra_local_us={d:.3}\n", .{local_us});
+    std.debug.print("METRIC dijkstra_regional_us={d:.3}\n", .{regional_us});
+    // Primary metric: geometric mean of the two regimes, so that both the short
+    // and the long walk carry the same relative weight.
+    std.debug.print("METRIC dijkstra_us={d:.3}\n", .{@sqrt(local_us * regional_us)});
+    std.debug.print("METRIC dijkstra_alloc_bytes={d}\n", .{@max(local.alloc_bytes, regional.alloc_bytes)});
+    std.debug.print("METRIC dijkstra_local_checksum={d}\n", .{local.checksum});
+    std.debug.print("METRIC dijkstra_regional_checksum={d}\n", .{regional.checksum});
+    std.debug.print("METRIC dijkstra_path_distance_mismatches={d}\n", .{distance_mismatches});
+    std.debug.print("METRIC dijkstra_path_elevation_mismatches={d}\n", .{elevation_mismatches});
 }

@@ -1,0 +1,3 @@
+advisors:
+  - name: default
+    model: deepseek/deepseek-flash:high
