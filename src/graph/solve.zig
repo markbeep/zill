@@ -160,9 +160,17 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                 const state = &search.states[node_idx];
                 return if (state.stamp == search.generation) state else null;
             }
+        };
 
-            fn compareForDistance(search: *const Search, u_idx: u32, v_idx: u32) std.math.Order {
-                return std.math.order(search.states[u_idx].distance, search.states[v_idx].distance);
+        /// Queue entry: the distance the node had when it was queued. An entry
+        /// whose distance no longer matches the node's state is stale and is
+        /// skipped when it surfaces.
+        const Entry = struct {
+            distance: u32,
+            idx: u32,
+
+            fn compareForDistance(_: void, a: Entry, b: Entry) std.math.Order {
+                return std.math.order(a.distance, b.distance);
             }
         };
 
@@ -192,11 +200,13 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             var best = initial;
             var best_idx: u32 = start_idx;
 
-            var pq = std.PriorityQueue(u32, *const Search, Search.compareForDistance).initContext(&search);
-            try pq.push(arena.allocator(), start_idx);
+            var pq = std.PriorityQueue(Entry, void, Entry.compareForDistance).initContext({});
+            try pq.push(arena.allocator(), .{ .distance = 0, .idx = start_idx });
 
-            while (pq.pop()) |current_idx| {
+            while (pq.pop()) |entry| {
+                const current_idx = entry.idx;
                 const u = search.find(current_idx) orelse unreachable;
+                if (entry.distance != u.distance) continue;
                 if (end_condition == .at_least_elevation and u.elevation >= end_condition.at_least_elevation) {
                     best = u.*;
                     best_idx = current_idx;
@@ -223,7 +233,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                         .prev = edge.u_idx,
                         .stamp = generation,
                     };
-                    try pq.push(arena.allocator(), edge.v_idx);
+                    try pq.push(arena.allocator(), .{ .distance = @intCast(new_distance), .idx = edge.v_idx });
 
                     if (new_elevation > best.elevation) {
                         best = search.states[edge.v_idx];
