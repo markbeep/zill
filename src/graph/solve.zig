@@ -1,6 +1,7 @@
 const std = @import("std");
 const s = @import("shared.zig");
 const graph = @import("graph.zig");
+const options = @import("options");
 
 pub const Coord = struct {
     lat: f64,
@@ -73,10 +74,11 @@ pub fn findBestStartingPoint(
             start_idx: u32,
             _allocator: std.mem.Allocator,
             _end_condition: EndCondition,
+            _nodes: []const s.Node,
             _edges: []const s.Edge,
             _outgoing: []std.ArrayList(u32),
         ) !Result {
-            const elevation = try Dijkstra(.Elevation).run(_allocator, start_idx, _end_condition, _edges, _outgoing);
+            const elevation = try Dijkstra(.Elevation).run(_allocator, start_idx, _end_condition, _nodes, _edges, _outgoing);
             p.completeOne();
             return .{ .elevation = elevation, .idx = start_idx };
         }
@@ -95,7 +97,7 @@ pub fn findBestStartingPoint(
     defer p.end();
 
     for (start_indices) |start_idx| {
-        select.async(.done, TaskBatch.run, .{ p, start_idx, allocator, end_condition, dyn.edges.items, dyn.node_edges.items });
+        select.async(.done, TaskBatch.run, .{ p, start_idx, allocator, end_condition, dyn.nodes.items, dyn.edges.items, dyn.node_edges.items });
     }
 
     const accum_progress = progress.start("accumulating results", start_indices.len);
@@ -139,6 +141,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             allocator: std.mem.Allocator,
             start_idx: u32,
             end_condition: EndCondition,
+            nodes: []const s.Node,
             edges: []const s.Edge,
             outgoing: []std.ArrayList(u32),
         ) !ReturnType {
@@ -147,11 +150,33 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                 distance: i64,
                 elevation: i32,
                 prev: ?u32,
+            };
 
-                fn compareForDistance(visited: *const std.AutoHashMap(u32, @This()), u_idx: u32, v_idx: u32) std.math.Order {
-                    const u = visited.get(u_idx) orelse unreachable;
-                    const v = visited.get(v_idx) orelse unreachable;
-                    return std.math.order(u.distance, v.distance);
+            const Context = struct {
+                visited: *const std.AutoHashMap(u32, VisitedNode),
+                nodes: []const s.Node,
+                start_idx: u32,
+
+                fn compareForDistance(ctx: @This(), u_idx: u32, v_idx: u32) std.math.Order {
+                    const u = ctx.visited.get(u_idx) orelse unreachable;
+                    const v = ctx.visited.get(v_idx) orelse unreachable;
+
+                    var u_h: i64 = 0;
+                    var v_h: i64 = 0;
+                    if (options.compute_a_star) {
+                        // compute dist to start
+                        const start = ctx.nodes[ctx.start_idx];
+                        const start_coord = Coord{ .lat = start.lat, .lon = start.lon };
+                        const u_n = ctx.nodes[u_idx];
+                        const u_coord = Coord{ .lat = u_n.lat, .lon = u_n.lon };
+                        const v_n = ctx.nodes[v_idx];
+                        const v_coord = Coord{ .lat = v_n.lat, .lon = v_n.lon };
+
+                        u_h = @trunc(haversineMeters(start_coord, u_coord));
+                        v_h = @trunc(haversineMeters(start_coord, v_coord));
+                    }
+
+                    return std.math.order(u.distance + u_h, v.distance + v_h);
                 }
             };
 
@@ -163,7 +188,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             try visited.put(start_idx, initial);
             var best: VisitedNode = initial;
 
-            var pq = std.PriorityQueue(u32, *const std.AutoHashMap(u32, VisitedNode), VisitedNode.compareForDistance).initContext(&visited);
+            var pq = std.PriorityQueue(u32, Context, Context.compareForDistance).initContext(Context{ .visited = &visited, .start_idx = start_idx, .nodes = nodes });
             try pq.push(arena.allocator(), start_idx);
 
             while (pq.pop()) |current_idx| {
@@ -176,7 +201,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                 for (outgoing[current_idx].items) |outgoing_edge_idx| {
                     const edge = edges[outgoing_edge_idx];
                     const new_distance = u.distance + edge.distance;
-                    const new_elevation = u.elevation + edge.elev_gain - edge.elev_loss;
+                    const new_elevation = if (options.ignore_elevation_loss) u.elevation + edge.elev_gain else u.elevation + edge.elev_gain - edge.elev_loss;
 
                     if (end_condition == .max_distance and new_distance > end_condition.max_distance) {
                         continue;
@@ -297,6 +322,7 @@ fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, co
                         allocator,
                         node_idx,
                         .{ .max_distance = 1_000 },
+                        g.nodes.items,
                         g.edges.items,
                         g.node_edges.items,
                     ) catch @panic("dijkstra2 failed");
@@ -311,6 +337,7 @@ fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, co
                         allocator,
                         node_idx,
                         .{ .max_distance = 1_000 },
+                        g.nodes.items,
                         g.edges.items,
                         g.node_edges.items,
                     ) catch @panic("dijkstra2 failed");

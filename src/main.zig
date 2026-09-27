@@ -114,7 +114,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Top results:\n", .{});
     for (best_start_results, 0..) |res, i| {
         std.debug.print("#{d}: elevation={d}\n", .{ i + 1, res.elevation });
-        const path_indices = try solve.Dijkstra(.Path).run(init.gpa, res.idx, end_condition, g.edges.items, g.node_edges.items);
+        const path_indices = try solve.Dijkstra(.Path).run(init.gpa, res.idx, end_condition, g.nodes.items, g.edges.items, g.node_edges.items);
         defer init.gpa.free(path_indices.indices);
 
         var path_buf: [64]u8 = undefined;

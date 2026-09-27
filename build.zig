@@ -24,6 +24,12 @@ pub fn build(b: *std.Build) !void {
 
     const options = b.addOptions();
     options.addOption(std.SemanticVersion, "version", version);
+
+    const ignore_elevation_loss = b.option(bool, "ignore-loss", "Ignore elevation loss when calculating route cost. Default: false") orelse false;
+    options.addOption(bool, "ignore_elevation_loss", ignore_elevation_loss);
+    const compute_a_star = b.option(bool, "compute-a-star", "Compute A* heuristic for routing. Default: false") orelse false;
+    options.addOption(bool, "compute_a_star", compute_a_star);
+
     zill_mod.addOptions("options", options);
 
     // ============= zillconv =============
