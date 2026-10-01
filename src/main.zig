@@ -82,7 +82,7 @@ pub fn main(init: std.process.Init) !void {
     var g = try zill.DynamicGraph.fromReader(arena.allocator(), &reader.interface);
     defer g.deinit();
 
-    std.debug.print("Graph loaded successfully with {d} nodes and {d} edges\n", .{ g.node_edges.items.len, g.edges.items.len });
+    std.debug.print("Graph loaded successfully with {d} nodes and {d} edges\n", .{ g.outgoing.items.len, g.edges.items.len });
 
     var from: usize, var to: usize, var mx: u32 = .{ 0, 0, 0 };
 

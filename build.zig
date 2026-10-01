@@ -25,8 +25,6 @@ pub fn build(b: *std.Build) !void {
     const options = b.addOptions();
     options.addOption(std.SemanticVersion, "version", version);
 
-    const ignore_elevation_loss = b.option(bool, "ignore-loss", "Ignore elevation loss when calculating route cost. Default: false") orelse false;
-    options.addOption(bool, "ignore_elevation_loss", ignore_elevation_loss);
     const compute_a_star = b.option(bool, "compute-a-star", "Compute A* heuristic for routing. Default: false") orelse false;
     options.addOption(bool, "compute_a_star", compute_a_star);
 
@@ -141,6 +139,10 @@ pub fn build(b: *std.Build) !void {
     const zill_tests = b.addTest(.{ .root_module = zill_mod });
     zill_tests.root_module.addImport("zbench", b.dependency("zbench", .{ .target = target, .optimize = optimize }).module("zbench"));
     const run_zill_tests = b.addRunArtifact(zill_tests);
+
+    if (b.args) |args| {
+        zill_tests.filters = args;
+    }
 
     const zillconv_tests = b.addTest(.{
         .root_module = zillconv_mod,

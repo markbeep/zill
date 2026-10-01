@@ -9,6 +9,8 @@ pub const DynamicGraph = dyn.DynamicGraph;
 
 pub const solve = @import("solve.zig");
 
+pub const elevation = @import("elevation.zig");
+
 test {
     @import("std").testing.refAllDecls(@This());
 }

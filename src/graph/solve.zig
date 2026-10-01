@@ -97,7 +97,7 @@ pub fn findBestStartingPoint(
     defer p.end();
 
     for (start_indices) |start_idx| {
-        select.async(.done, TaskBatch.run, .{ p, start_idx, allocator, end_condition, dyn.nodes.items, dyn.edges.items, dyn.node_edges.items });
+        select.async(.done, TaskBatch.run, .{ p, start_idx, allocator, end_condition, dyn.nodes.items, dyn.edges.items, dyn.outgoing.items });
     }
 
     const accum_progress = progress.start("accumulating results", start_indices.len);
@@ -201,7 +201,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                 for (outgoing[current_idx].items) |outgoing_edge_idx| {
                     const edge = edges[outgoing_edge_idx];
                     const new_distance = u.distance + edge.distance;
-                    const new_elevation = if (options.ignore_elevation_loss) u.elevation + edge.elev_gain else u.elevation + edge.elev_gain - edge.elev_loss;
+                    const new_elevation = u.elevation + edge.elev_gain;
 
                     if (end_condition == .max_distance and new_distance > end_condition.max_distance) {
                         continue;
@@ -324,7 +324,7 @@ fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, co
                         .{ .max_distance = 1_000 },
                         g.nodes.items,
                         g.edges.items,
-                        g.node_edges.items,
+                        g.outgoing.items,
                     ) catch @panic("dijkstra2 failed");
                     defer allocator.free(result.indices);
                 }
@@ -339,7 +339,7 @@ fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, co
                         .{ .max_distance = 1_000 },
                         g.nodes.items,
                         g.edges.items,
-                        g.node_edges.items,
+                        g.outgoing.items,
                     ) catch @panic("dijkstra2 failed");
                 }
             };
@@ -358,7 +358,7 @@ test "benchmark distance dijkstra" {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
 
-    var f = try std.Io.Dir.cwd().openFile(testing.io, "data/switzerland_walkable.zl", .{ .mode = .read_only });
+    var f = try std.Io.Dir.cwd().openFile(testing.io, "data/switzerland_walkable_100m.zl", .{ .mode = .read_only });
     defer f.close(testing.io);
 
     var buffer: [1024]u8 = undefined;

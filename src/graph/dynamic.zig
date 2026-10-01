@@ -6,7 +6,7 @@ pub const DynamicGraph = struct {
 
     nodes: std.ArrayList(s.Node),
     edges: std.ArrayList(s.Edge),
-    node_edges: std.ArrayList(std.ArrayList(u32)),
+    outgoing: std.ArrayList(std.ArrayList(u32)),
     osm_id_to_node_idx: std.AutoHashMap(i64, u32),
 
     pub fn init(allocator: std.mem.Allocator) DynamicGraph {
@@ -14,16 +14,16 @@ pub const DynamicGraph = struct {
             .allocator = allocator,
             .nodes = std.ArrayList(s.Node).empty,
             .edges = std.ArrayList(s.Edge).empty,
-            .node_edges = std.ArrayList(std.ArrayList(u32)).empty,
+            .outgoing = std.ArrayList(std.ArrayList(u32)).empty,
             .osm_id_to_node_idx = std.AutoHashMap(i64, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *DynamicGraph) void {
-        for (self.node_edges.items) |*edge_list| {
+        for (self.outgoing.items) |*edge_list| {
             edge_list.deinit(self.allocator);
         }
-        self.node_edges.deinit(self.allocator);
+        self.outgoing.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
         self.edges.deinit(self.allocator);
         self.osm_id_to_node_idx.deinit();
@@ -43,7 +43,7 @@ pub const DynamicGraph = struct {
                 .elev = if (elev) |e| @trunc(e) else null,
             },
         );
-        try self.node_edges.append(self.allocator, std.ArrayList(u32).empty);
+        try self.outgoing.append(self.allocator, std.ArrayList(u32).empty);
         try self.osm_id_to_node_idx.put(id, idx);
         return idx;
     }
@@ -60,7 +60,7 @@ pub const DynamicGraph = struct {
                 .distance = distance,
             },
         );
-        try self.node_edges.items[u_idx].append(self.allocator, idx);
+        try self.outgoing.items[u_idx].append(self.allocator, idx);
     }
 
     pub const EdgeIterator = struct {
@@ -79,7 +79,7 @@ pub const DynamicGraph = struct {
     pub fn iterateOutgoingEdges(self: *DynamicGraph, u_idx: usize) EdgeIterator {
         return .{
             .graph = self,
-            .edge_indices = self.node_edges.items[u_idx].items,
+            .edge_indices = self.outgoing.items[u_idx].items,
         };
     }
 
@@ -134,7 +134,7 @@ pub const DynamicGraph = struct {
                 .elev = if (packed_node.elev == s.PackedNode.INVALID_ELEV) null else @intCast(packed_node.elev),
             };
             try graph.nodes.append(allocator, node);
-            try graph.node_edges.append(allocator, std.ArrayList(u32).empty);
+            try graph.outgoing.append(allocator, std.ArrayList(u32).empty);
             try graph.osm_id_to_node_idx.put(node.id, @intCast(i));
         }
 
@@ -143,7 +143,7 @@ pub const DynamicGraph = struct {
             var edge: s.Edge = undefined;
             try reader.readSliceAll(std.mem.asBytes(&edge));
             try graph.edges.append(allocator, edge);
-            try graph.node_edges.items[edge.u_idx].append(allocator, @intCast(i));
+            try graph.outgoing.items[edge.u_idx].append(allocator, @intCast(i));
         }
 
         // Edges the other way
@@ -157,7 +157,7 @@ pub const DynamicGraph = struct {
                 .distance = edge.distance,
             };
             try graph.edges.append(allocator, flipped);
-            try graph.node_edges.items[flipped.u_idx].append(allocator, @intCast(i + header.edge_count));
+            try graph.outgoing.items[flipped.u_idx].append(allocator, @intCast(i + header.edge_count));
         }
 
         return graph;
