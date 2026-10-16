@@ -4,12 +4,15 @@ Generates graphs from OpenStreetMap data optimized for elevation-based routing.
 
 ## Structure
 
-The library is split into two sub-libraries that can be used independently:
+Three subprojects in one repo:
 
-- `zillconv` - Converts OSM data into a `.zl` file. _Requires PROJ and expat as a system dependency._
-- `zill` - Loads the `.zl` file and runs graph algorithms on it. _Has no dependencies._
+- `convert/` (`zillconv`) - Converts OSM data into a `.zl` file. _Requires PROJ and expat as a system dependency._
+- `find/` (`zill`) - Loads the `.zl` file and runs graph algorithms on it. _Has no dependencies._
+- `dashboard/` - Web UI for drawing inclusion areas and showing steep routes on an interactive map.
 
-`.zl` is a custom binary format to store the graph data in a compact way. It does not follow the OSM data model of nodes and ways directly; only nodes are stored that are either part of an intersection or mark the beginning or end of a way. Intermediate nodes that are only part of a single way are not stored. The file is split up into three parts (view `graph/shared.zig` for the exact layout):
+Each Zig subproject is a standalone project with its own `build.zig` and `build.zig.zon`. `convert` uses the graph library from `find` through a Zig path dependency (`convert/build.zig.zon`). `data/` and `dist/` are shared at the repo root.
+
+`.zl` is a custom binary format to store the graph data in a compact way. It does not follow the OSM data model of nodes and ways directly; only nodes are stored that are either part of an intersection or mark the beginning or end of a way. Intermediate nodes that are only part of a single way are not stored. The file is split up into three parts (view `find/src/graph/shared.zig` for the exact layout):
 
 - **Header:** Contains the Zill version the file was generated with, as well as the number of nodes and edges.
 - **Nodes:** Each node store the OSM node ID, latitude, longitude, and elevation.
@@ -17,6 +20,19 @@ The library is split into two sub-libraries that can be used independently:
 
 > [!NOTE]
 > [Releases page](https://github.com/markbeep/zill/releases) includes pre-generated `.zl` files.
+
+## Building
+
+Run everything from the repo root through the [`justfile`](justfile), so the `data/` paths in the defaults resolve:
+
+```sh
+just          # build both Zig subprojects
+just test     # run both test suites
+just generate # convert OSM data into a .zl file
+just dist     # cross-compile release binaries into dist/
+```
+
+The recipes are thin wrappers around `zig build --build-file <subproject>/build.zig`. They must run from the repo root: the executables and tests resolve `data/` relative to the working directory.
 
 ## Graph Algorithms
 
@@ -40,19 +56,19 @@ Options:
 ```
 
 ```sh
-zig build -Doptimize=ReleaseFast run -- -i switzerland_walkable.zl -d 1000
+just run -- -i data/switzerland_walkable_100m.zl -d 1000
 ```
 
 ## Convert - Generate .zl file from OSM data
 
-If you want to generate your own `.zl` file, you can use the `zillconv` library. It depends on [PROJ](https://proj.org/) to convert the coordinates from WGS84 to Swiss coordinate system (EPSG:21781) and [expat](https://libexpat.github.io/) to parse the OSM XML data. End goal would be to fully remove these system dependencies and build everything with the Zig build system.
+If you want to generate your own `.zl` file, you can use the `convert/` subproject (`zillconv`). It depends on [PROJ](https://proj.org/) to convert the coordinates from WGS84 to Swiss coordinate system (EPSG:21781) and [expat](https://libexpat.github.io/) to parse the OSM XML data. End goal would be to fully remove these system dependencies and build everything with the Zig build system.
 
 ### Generating graph.zl
 
 Requires `proj.db` for now.
 
 ```sh
-PROJ_DATA="/usr/share/proj" zig build zillconv
+PROJ_DATA=/usr/share/proj just generate
 ```
 
 ### Elevation Map

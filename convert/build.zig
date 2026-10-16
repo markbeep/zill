@@ -6,43 +6,25 @@ const build_expat = @import("build/expat.zig");
 const build_tiff = @import("build/tiff.zig");
 const build_proj = @import("build/proj.zig");
 const build_readosm = @import("build/readosm.zig");
-const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const version = try std.SemanticVersion.parse(zon.version);
-
-    // ============= zill =============
-
-    const zill_mod = b.createModule(.{
-        .root_source_file = b.path("src/graph/graph.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const options = b.addOptions();
-    options.addOption(std.SemanticVersion, "version", version);
-
-    const ignore_elevation_loss = b.option(bool, "ignore-loss", "Ignore elevation loss when calculating route cost. Default: false") orelse false;
-    options.addOption(bool, "ignore_elevation_loss", ignore_elevation_loss);
-    const compute_a_star = b.option(bool, "compute-a-star", "Compute A* heuristic for routing. Default: false") orelse false;
-    options.addOption(bool, "compute_a_star", compute_a_star);
-
-    zill_mod.addOptions("options", options);
+    // Graph library, imported from the `find` subproject.
+    const zill_mod = b.dependency("zill", .{ .target = target, .optimize = optimize }).module("zill");
 
     // ============= zillconv =============
 
     const translate_tiff = b.addTranslateC(.{
-        .root_source_file = b.path("src/conv/tiff.h"),
+        .root_source_file = b.path("src/tiff.h"),
         .target = target,
         .optimize = optimize,
     });
     build_geotiff.addHeaders(b, target, optimize, translate_tiff);
 
     const translate_osm = b.addTranslateC(.{
-        .root_source_file = b.path("src/conv/osm.h"),
+        .root_source_file = b.path("src/osm.h"),
         .target = target,
         .optimize = optimize,
     });
@@ -52,7 +34,7 @@ pub fn build(b: *std.Build) !void {
     const readosm_c_mod = translate_osm.createModule();
 
     const zillconv_mod = b.createModule(.{
-        .root_source_file = b.path("src/conv/zillconv.zig"),
+        .root_source_file = b.path("src/zillconv.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -107,41 +89,16 @@ pub fn build(b: *std.Build) !void {
     zillconv_exe.root_module.linkLibrary(lib_expat);
     b.installArtifact(zillconv_exe);
 
-    // ============= zill executable =============
-
-    const zill_exe = b.addExecutable(.{
-        .name = "zill",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zill", .module = zill_mod },
-            },
-        }),
-    });
-    b.installArtifact(zill_exe);
-    zill_exe.root_module.addImport("args", b.dependency("args", .{ .target = target, .optimize = optimize }).module("args"));
-
-    // Run steps
-    const zillconv_step = b.step("zillconv", "Build OSM/TIFF parser and generate data/graph.zl");
-    const zillconv_cmd = b.addRunArtifact(zillconv_exe);
-    zillconv_step.dependOn(&zillconv_cmd.step);
-
-    const run_step = b.step("run", "Alias for `zill` (read data/graph.zl)");
-    const run_cmd = b.addRunArtifact(zill_exe);
+    // Run step
+    const run_step = b.step("run", "Build the OSM/TIFF parser and generate a .zl file");
+    const run_cmd = b.addRunArtifact(zillconv_exe);
     run_step.dependOn(&run_cmd.step);
 
     if (b.args) |args| {
-        zillconv_cmd.addArgs(args);
         run_cmd.addArgs(args);
     }
 
     // Tests
-    const zill_tests = b.addTest(.{ .root_module = zill_mod });
-    zill_tests.root_module.addImport("zbench", b.dependency("zbench", .{ .target = target, .optimize = optimize }).module("zbench"));
-    const run_zill_tests = b.addRunArtifact(zill_tests);
-
     const zillconv_tests = b.addTest(.{
         .root_module = zillconv_mod,
         .use_llvm = true,
@@ -154,6 +111,5 @@ pub fn build(b: *std.Build) !void {
     const run_zillconv_tests = b.addRunArtifact(zillconv_tests);
 
     const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&run_zill_tests.step);
     test_step.dependOn(&run_zillconv_tests.step);
 }
