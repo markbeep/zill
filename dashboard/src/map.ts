@@ -1,6 +1,12 @@
 // MapLibre layer over the swisstopo sheets. Terrain keeps its own colours; the
 // only thing this module adds is the course: one overprint purple for the area,
 // the route lines and the ranked badges.
+//
+// Three grounds, each of them swisstopo's own product over its relief shading:
+// the shading on its own, the greyscale sheet, and the aerial image. The sheet
+// prints its own names, so the other two borrow swisstopo's names layer, which
+// is written names only from z12 up: below that the same layer is a field of
+// point symbols, and a field of symbols is not a map.
 
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -8,6 +14,7 @@ import type { DataDrivenPropertyValueSpecification } from 'maplibre-gl';
 import type { Feature, FeatureCollection } from 'geojson';
 import type { LngLat, ScreenPoint } from './area';
 import type { Route } from './wasm';
+import { ROUTE_START_MARK } from './icons';
 
 export const OVERPRINT = '#8e5cc0';
 const PAPER = '#fbfaf7';
@@ -51,7 +58,7 @@ function widthForGrade(scale: number): DataDrivenPropertyValueSpecification<numb
   return ['interpolate', ['linear'], ['get', 'grade'], ...stops] as DataDrivenPropertyValueSpecification<number>;
 }
 
-export type Basemap = 'sheet' | 'satellite';
+export type Basemap = 'shade' | 'topo' | 'satellite';
 
 export class CourseMap {
   readonly map: maplibregl.Map;
@@ -71,7 +78,7 @@ export class CourseMap {
     starts: null as Float32Array | null,
     routes: [] as Route[],
     selectedRank: null as number | null,
-    basemap: 'sheet' as Basemap,
+    basemap: 'topo' as Basemap,
   };
 
   constructor(container: HTMLElement) {
@@ -104,6 +111,14 @@ export class CourseMap {
             maxzoom: 17,
             attribution: '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · SWISSIMAGE',
           },
+          names: {
+            type: 'raster',
+            tiles: [`${WMTS}/ch.swisstopo.vec200-names-namedlocation/default/current/3857/{z}/{x}/{y}.png`],
+            tileSize: 256,
+            minzoom: 12,
+            maxzoom: 17,
+            attribution: '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · names',
+          },
           area: { type: 'geojson', data: emptyCollection() },
           user: { type: 'geojson', data: emptyCollection() },
           vertices: { type: 'geojson', data: emptyCollection() },
@@ -116,6 +131,11 @@ export class CourseMap {
           { id: 'relief', type: 'raster', source: 'relief', paint: { 'raster-opacity': 0.38 } },
           { id: 'sheet', type: 'raster', source: 'sheet', paint: { 'raster-opacity': 0.74 } },
           { id: 'satellite', type: 'raster', source: 'satellite', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85 } },
+          // Labels the sheet already carries, for the grounds that carry none:
+          // white-haloed, so they hold over pale shading and dark imagery alike.
+          // Below their own zoom there is no transparent names source at all, so
+          // the grounds simply carry no names there.
+          { id: 'names', type: 'raster', source: 'names', minzoom: 12, layout: { visibility: 'none' } },
           {
             id: 'area-veil',
             type: 'fill',
@@ -286,8 +306,27 @@ export class CourseMap {
   setBasemap(kind: Basemap): void {
     this.pending.basemap = kind;
     if (!this.styled) return;
-    this.map.setLayoutProperty('sheet', 'visibility', kind === 'sheet' ? 'visible' : 'none');
+    // The shading is the ground under all three. Only the shade ground shows it
+    // on its own, so only there does it carry the full weight.
+    this.map.setPaintProperty('relief', 'raster-opacity', kind === 'shade' ? 0.88 : 0.38);
+    this.map.setLayoutProperty('sheet', 'visibility', kind === 'topo' ? 'visible' : 'none');
     this.map.setLayoutProperty('satellite', 'visibility', kind === 'satellite' ? 'visible' : 'none');
+    // The greyscale sheet prints its own names; the other two grounds borrow these.
+    this.map.setLayoutProperty('names', 'visibility', kind === 'topo' ? 'none' : 'visible');
+  }
+
+  /** Takes the camera to a place the search found. */
+  showPlace(at: LngLat, zoom: number): void {
+    this.map.flyTo({ center: [at.lng, at.lat], zoom, duration: this.cameraMs(700) });
+  }
+
+  /** Frames one chosen climb: tapping its row means "show me this". */
+  focusRoute(route: Route): void {
+    if (route.points.length < 3) return;
+    const first: [number, number] = [route.points[1], route.points[0]];
+    const bounds = new maplibregl.LngLatBounds(first, first);
+    for (let i = 0; i < route.points.length; i += 3) bounds.extend([route.points[i + 1], route.points[i]]);
+    this.map.fitBounds(bounds, { padding: this.sheetPadding(60), duration: this.cameraMs(500), maxZoom: 14.5 });
   }
 
   /** Shows the visitor's own position, with the accuracy it was reported with. */
@@ -522,8 +561,7 @@ export class CourseMap {
     const mark = document.createElement('span');
     mark.className = 'route-start';
     mark.style.transform = `rotate(${bearing.toFixed(1)}deg)`;
-    mark.innerHTML =
-      '<svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d="M5 0.5 9.5 9.5 5 7.4 0.5 9.5Z" fill="currentColor"/></svg>';
+    mark.innerHTML = ROUTE_START_MARK;
     holder.appendChild(mark);
     this.startMarker = new maplibregl.Marker({ element: holder, anchor: 'center' })
       .setLngLat([route.points[1], route.points[0]])

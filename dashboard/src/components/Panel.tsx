@@ -1,4 +1,4 @@
-import { For, Show } from 'solid-js';
+import { createSignal, For, Show } from 'solid-js';
 import type { LoadState, Route, SearchStats } from '../wasm';
 import type { LngLat } from '../area';
 
@@ -16,16 +16,46 @@ type PanelProps = {
   pinnedRoute: number | null;
   notice: string | null;
   panelOpen: boolean;
-  onTogglePanel: () => void;
+  onPanelChange: (open: boolean) => void;
   onDistance: (meters: number) => void;
   onSearch: () => void;
   onStop: () => void;
-  /** Hover preview; clears when the pointer leaves. */
+  /** Hover preview; clears when the pointer leaves. Fine pointers only. */
   onSelectRoute: (rank: number | null) => void;
   /** Click keeps the selection; null clears it. */
   onPinRoute: (rank: number | null) => void;
+  /** Clicking a row also frames that climb. */
+  onFocusRoute: (rank: number) => void;
   onExport: (rank: number) => void;
 };
+
+/** Touch fires mouseenter and pointerenter around a tap, which reads as a
+ *  preview nobody asked for and a selection that drops itself. Hover, and the
+ *  hints that hang off it, are a pointer's game. */
+export const HOVER_CAPABLE = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+/** The sheet's height on small screens: the visitor sets it. Only a pull that
+ *  ends near the bottom means "put it away", so pulling the sheet down a little
+ *  parks it small instead of taking it off the map. */
+const SHEET_KEY = 'zill:sheet';
+const SHEET_DEFAULT = 52;
+/** Below this, a released pull was aimed at the bottom of the screen. */
+const SHEET_SNAP = 13;
+const SHEET_MAX = 82;
+/** The folded sheet's own height: no pull can take it below its head. */
+const SHEET_TAB = 44;
+/** A press that never moves is a tap on the head, which folds the sheet. */
+const SHEET_SLOP_PX = 6;
+
+function storedSheet(): number {
+  try {
+    const stored = Number(localStorage.getItem(SHEET_KEY));
+    if (stored >= SHEET_SNAP && stored <= SHEET_MAX) return stored;
+  } catch {
+    // A browser that refuses storage still gets a sheet.
+  }
+  return SHEET_DEFAULT;
+}
 
 const swiss = (value: number, digits: number) => value.toLocaleString('de-CH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
@@ -54,6 +84,82 @@ function coordinate(route: Route): string {
 }
 
 export function Panel(props: PanelProps) {
+  const [sheet, setSheet] = createSignal(storedSheet());
+  const [shifting, setShifting] = createSignal(false);
+  let panel: HTMLElement | undefined;
+  let gesture: { id: number; from: number; height: number; moved: boolean; onControl: boolean } | null = null;
+
+  /** The sheet is a bottom sheet on small screens only; elsewhere the head is
+   *  just a head, and there is nothing to pull. */
+  const smallScreen = () => typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches;
+
+  const toDvh = (pixels: number) => (pixels / window.innerHeight) * 100;
+
+  function grabSheet(event: PointerEvent): void {
+    if (event.button !== 0 || !smallScreen()) return;
+    const box = panel?.getBoundingClientRect();
+    if (!box) return;
+    gesture = {
+      id: event.pointerId,
+      from: event.clientY,
+      height: box.height,
+      moved: false,
+      // A press on a control belongs to that control: the button keeps its click.
+      onControl: event.target instanceof Element && event.target.closest('button, a, input') !== null,
+    };
+  }
+
+  function dragSheet(event: PointerEvent): void {
+    const started = gesture;
+    if (!started || event.pointerId !== started.id) return;
+    if (!started.moved && Math.abs(started.from - event.clientY) < SHEET_SLOP_PX) return;
+    if (!started.moved) {
+      started.moved = true;
+      // Capture only once this is a drag: capturing on the press would take the
+      // head button's own click away from it.
+      event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId);
+      setShifting(true);
+      // The pull takes over from the tab: the sheet follows the finger.
+      props.onPanelChange(true);
+    }
+    setSheet(Math.min(SHEET_MAX, Math.max(toDvh(SHEET_TAB), toDvh(started.height + started.from - event.clientY))));
+  }
+
+  function releaseSheet(event: PointerEvent): void {
+    const started = gesture;
+    if (!started || event.pointerId !== started.id) return;
+    gesture = null;
+    if (!started.moved) {
+      // A tap on the head folds the sheet, the way a bottom sheet's bar does. The
+      // fold waits for the next frame: the browser still has a click to deliver
+      // from this tap, and moving the layout first would hand that click to
+      // whatever moved in underneath (the map, or a route row).
+      if (!started.onControl) requestAnimationFrame(() => props.onPanelChange(!props.panelOpen));
+      return;
+    }
+    setShifting(false);
+    if (sheet() < SHEET_SNAP) {
+      // The pull finished at the bottom of the screen: that means put it away.
+      setSheet(storedSheet());
+      props.onPanelChange(false);
+      return;
+    }
+    // Anywhere above that is a height the visitor chose, and it is kept exactly
+    // as it was left, however small.
+    try {
+      localStorage.setItem(SHEET_KEY, String(Math.round(sheet())));
+    } catch {
+      // A browser that refuses storage still gets the height for this visit.
+    }
+    props.onPanelChange(true);
+  }
+
+  function abortSheet(): void {
+    if (!gesture) return;
+    gesture = null;
+    setShifting(false);
+  }
+
   /** The bar's span comes from the result set, so it always carries data. */
   const gradientSpan = () => {
     const strongest = props.routes.reduce((max, route) => {
@@ -125,8 +231,19 @@ export function Panel(props: PanelProps) {
   };
 
   return (
-      <aside class="panel" classList={{ 'panel--closed': !props.panelOpen }}>
-      <header class="panel__block">
+      <aside
+        class="panel"
+        classList={{ 'panel--closed': !props.panelOpen, 'is-dragging': shifting() }}
+        style={{ '--sheet-h': `${sheet()}dvh` }}
+        ref={panel}
+      >
+      <header
+        class="panel__block panel__grab"
+        on:pointerdown={grabSheet}
+        on:pointermove={dragSheet}
+        on:pointerup={releaseSheet}
+        on:pointercancel={abortSheet}
+      >
         <div class="panel__head">
           <div class="wordmark">
             zill<span>hill finder</span>
@@ -134,7 +251,12 @@ export function Panel(props: PanelProps) {
           <span class="panel__tab-figures">
             {props.area ? `${swiss(props.nodeCount, 0)} starts · ${props.routes.length} kept` : 'no area yet'}
           </span>
-          <button type="button" class="toolbar__button" aria-expanded={props.panelOpen} onClick={props.onTogglePanel}>
+          <button
+            type="button"
+            class="toolbar__button"
+            aria-expanded={props.panelOpen}
+            onClick={() => props.onPanelChange(!props.panelOpen)}
+          >
             {props.panelOpen ? 'hide' : 'show'}
           </button>
         </div>
@@ -257,11 +379,16 @@ export function Panel(props: PanelProps) {
                       data-rank={route.rank}
                       classList={{ 'is-selected': props.selectedRoute === route.rank }}
                       aria-pressed={props.selectedRoute === route.rank}
-                      onClick={() => props.onPinRoute(props.pinnedRoute === route.rank ? null : route.rank)}
-                      onMouseEnter={() => props.onSelectRoute(route.rank)}
-                      onMouseLeave={() => props.onSelectRoute(null)}
-                      onFocus={() => props.onSelectRoute(route.rank)}
-                      onBlur={() => props.onSelectRoute(null)}
+                      onClick={() => {
+                        const next = props.pinnedRoute === route.rank ? null : route.rank;
+                        props.onPinRoute(next);
+                        // Choosing a climb means wanting to see it.
+                        if (next !== null) props.onFocusRoute(route.rank);
+                      }}
+                      onMouseEnter={() => HOVER_CAPABLE && props.onSelectRoute(route.rank)}
+                      onMouseLeave={() => HOVER_CAPABLE && props.onSelectRoute(null)}
+                      onFocus={() => HOVER_CAPABLE && props.onSelectRoute(route.rank)}
+                      onBlur={() => HOVER_CAPABLE && props.onSelectRoute(null)}
                     >
                       <span class="route__rank">{route.rank}</span>
                       <span class="route__body">
@@ -321,6 +448,12 @@ export function Panel(props: PanelProps) {
               <span class="legend__badge">1</span>
             </span>
             <span>rank of the ten strongest climbs, set beside each summit</span>
+          </li>
+          <li>
+            <span class="legend__mark">
+              <span class="legend__start" />
+            </span>
+            <span>where the chosen climb sets off. the mark turns to face the way it goes along the first metres</span>
           </li>
           <li>
             <span class="legend__mark">

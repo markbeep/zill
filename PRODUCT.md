@@ -47,16 +47,27 @@ a climber wants is rarely round.
 ## Capabilities and Constraints
 
 - Concave polygon area with vertex dragging, insertion by dragging an edge, vertex removal, and a
-  keyboard path for all three; live count of graph start nodes inside the area. The first click
-  places a ~5 km triangle, and the panel collapses to a one-line tab on small screens.
+  keyboard path for all three; live count of graph start nodes inside the area. A click or tap on a
+  point that never moved asks before it removes (`delete point 3?`), because a phone has no Delete
+  key. The first click places a ~5 km triangle. On small screens the sheet's height is the visitor's:
+  dragged by its head to any height up to 82 dvh and kept exactly there, shut only by a pull that
+  reaches the bottom of the screen, and remembered.
 - One search in the dashboard: the strongest climb that starts inside the drawn area within the
   entered distance (metres, default 1'000). The CLI keeps both directions, including the elevation
   target; the dashboard deliberately exposes only the distance one.
 - Progressive search: the client watches routes appear while the algorithm works through start
   nodes, with duplicated climbs suppressed and up to 60 distinct climbs kept. Steepness is carried by
-  line weight and strength within the single course colour, and every route exports as GPX.
-- The visitor's own position can be shown on the map, and the basemap switches between the swisstopo
-  sheet and the aerial image.
+  line weight and strength within the single course colour, and every route exports as GPX. Choosing
+  a row frames that climb; the map's own sheet still releases it.
+- The visitor's own position can be shown on the map, and the ground under the course switches
+  between the relief shading alone, the swisstopo greyscale sheet and the aerial image, one at a time.
+  The sheet prints its own names; the other two carry swisstopo's names layer from z12 up, where that
+  layer is written names rather than the field of point symbols it is at country zooms, and carry no
+  names below it. Nothing unseen is fetched, and nothing is washed over a ground to lend it names.
+- Places can be found by name from swisstopo's own gazetteer, address and postcode services
+  (keyless, called from the browser): the magnifier unfolds a field between the ground control and
+  locate, the answers hang below the toolbar, and choosing one flies the camera to it, where it stops:
+  no mark is planted.
 - Every start node inside the area is drawn, however large the area, thinned by zoom so the field
   reads as texture rather than as blobs.
 - Resource budget: the walkable graph is ~146 MB decompressed and must stay resident in the browser

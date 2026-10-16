@@ -19,6 +19,9 @@
   --danger: #a3362c;
 
   --panel-w: 360px;
+  /* One toolbar cell: buttons, icon controls and the search field all wear it,
+     so the row stays a ruled set of cells however the text inside is sized. */
+  --control-h: 27px;
   --font: 'Archivo Narrow', 'Arial Narrow', system-ui, sans-serif;
   --hairline: 1px solid var(--rule);
 }
@@ -87,6 +90,39 @@ body {
   font-weight: 700;
 }
 
+/* The question a click on a point asks. It is a map tooltip that answers back,
+   in the same paper and hairline as the map's own cells. */
+.confirm {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  transform: translate(-50%, calc(-100% - 14px));
+  padding: 5px 6px 5px 8px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  white-space: nowrap;
+}
+
+.confirm__ask {
+  font-size: 11px;
+}
+
+/* The affirmative choice carries the fill. There is no second button: a tap
+   anywhere else, or Escape, is the way out. */
+.confirm__delete {
+  border: 1px solid var(--ink);
+  padding: 3px 7px;
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
 .map__attribution {
   font-size: 10px;
 }
@@ -122,7 +158,9 @@ body {
 }
 
 /* Pinned inside the map, which the sheet partly covers: the toolbar starts
-   after the sheet and stays there, open or closed. */
+   after the sheet and stays there, open or closed. Only its cells take a tap:
+   the gaps between them, and the empty half of a search cell that has grown to
+   fill its row, belong to the map underneath. */
 .map__toolbar {
   position: absolute;
   top: 12px;
@@ -130,12 +168,29 @@ body {
   z-index: 4;
   display: flex;
   gap: 6px;
+  pointer-events: none;
+}
+
+.map__toolbar > * {
+  pointer-events: auto;
+}
+
+.map__toolbar > .search {
+  pointer-events: none;
+}
+
+.search > * {
+  pointer-events: auto;
 }
 
 .toolbar__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
   border: 1px solid var(--ink);
   background: var(--paper);
-  padding: 5px 8px;
+  padding: 0 8px;
   font: inherit;
   font-size: 11px;
   letter-spacing: 0.08em;
@@ -160,6 +215,113 @@ body {
   border-color: var(--rule);
   color: var(--ink-muted);
   cursor: not-allowed;
+}
+
+/* the place search -------------------------------------------------------- */
+
+/* Folded, this control is one cell of the toolbar. Unfolded, the field and its
+   answers are made of the same paper, hairlines and label type as the rest. */
+.search {
+  display: flex;
+  min-width: 0;
+}
+
+.search__field {
+  display: flex;
+  align-items: stretch;
+  height: var(--control-h);
+  border: 1px solid var(--ink);
+  background: var(--paper);
+}
+
+.search__input {
+  width: 220px;
+  min-width: 0;
+  border: 0;
+  padding: 0 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.search__input:focus-visible {
+  outline-offset: -2px;
+}
+
+.search__input::placeholder {
+  color: var(--ink-muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.search__fold {
+  display: flex;
+  align-items: center;
+  padding: 0 7px;
+  border: 0;
+  border-left: var(--hairline);
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.search__fold:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The answers hang off the toolbar's own edge, so nothing below them is pushed
+   around while they are up. */
+.search__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 2;
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(52dvh, 340px);
+  overflow-y: auto;
+  border: var(--hairline);
+  background: var(--paper);
+}
+
+.search__note {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.search__results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search__result {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-top: var(--hairline);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search__results > li:first-child .search__result {
+  border-top: 0;
+}
+
+.search__result.is-active {
+  background: var(--overprint-tint);
+}
+
+.search__result:focus-visible {
+  outline-offset: -2px;
 }
 
 .route-badge-holder,
@@ -285,7 +447,7 @@ body {
   align-items: center;
   justify-content: center;
   min-width: 26px;
-  padding: 5px 6px;
+  padding: 0 6px;
 }
 
 /* The legend folds away: the panel is for work, not for reference material. */
@@ -727,6 +889,24 @@ body {
   font-weight: 700;
 }
 
+/* The map's start mark in miniature: a ring with the play triangle inside. */
+.legend__start {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--overprint);
+  border-radius: 50%;
+}
+
+.legend__start::before {
+  content: '';
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-bottom: 4.5px solid var(--overprint);
+}
+
 .legend__handle {
   width: 9px;
   height: 9px;
@@ -823,6 +1003,20 @@ input {
   font-size: 10px;
 }
 
+/* MapLibre paints a second, non-interactive info glyph in the corner (`:after`)
+   beside the summary button. In a box that wraps to two lines the two part ways
+   and that copy is left hanging on the bottom edge. Keep the button: it is the
+   one that opens the credits, and it sits on the box's centre line. */
+.maplibregl-ctrl-attrib.maplibregl-compact:after {
+  display: none;
+}
+
+.maplibregl-ctrl-attrib-button {
+  top: 0;
+  bottom: 0;
+  margin-block: auto;
+}
+
 .maplibregl-ctrl-scale {
   border-top: 0;
 }
@@ -835,40 +1029,81 @@ input {
 
 @media (max-width: 900px) {
   /* The sheet lives at the bottom over the map, the same way the desktop panel
-     lives at the left over it: the map keeps its size either way. */
+     lives at the left over it: the map keeps its size either way. Its height is
+     the visitor's, between a band that still shows figures and the frame's
+     own ceiling; below the band it snaps shut instead of sitting uselessly
+     small. */
   .panel {
     position: absolute;
     top: auto;
     bottom: 0;
     width: 100%;
-    height: auto;
-    max-height: 62dvh;
+    height: min(var(--sheet-h, 52dvh), 82dvh);
     border-right: 0;
     border-top: var(--hairline);
-    transition: max-height 220ms cubic-bezier(0.2, 0, 0, 1);
+    padding-bottom: env(safe-area-inset-bottom);
+    transition: height 220ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  /* Nothing animates while a finger is on it: the sheet is under the finger. */
+  .panel.is-dragging {
+    transition: none;
   }
 
   .panel--closed {
     height: auto;
-    max-height: 44px;
+    max-height: calc(44px + env(safe-area-inset-bottom));
   }
 
-  /* The sheet lies along the bottom here, so the toolbar keeps the top-left. */
+  /* The head is the sheet's handle: pull it, or tap it to fold the sheet. */
+  .panel__grab {
+    touch-action: none;
+    cursor: grab;
+  }
+
+  .panel__grab:active {
+    cursor: grabbing;
+  }
+
+  /* The sheet lies along the bottom here, so the toolbar keeps the top-left. It
+     carries three grounds, a search, locate, undo, redo and clear, which is more
+     than a phone's width holds: it wraps rather than crushing its cells. */
   .map__toolbar {
-    left: 12px;
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    top: max(12px, env(safe-area-inset-top));
+    flex-wrap: wrap;
+  }
+
+  /* Unfolded, the field shares the first row widest it can be, and the answers
+     hang beneath the whole toolbar. */
+  .search {
+    flex: 1 1 180px;
+  }
+
+  .search__input {
+    width: 100%;
+    /* 16px is where iOS stops zooming the frame when a field takes focus. */
+    font-size: 16px;
+  }
+
+  .field input {
+    font-size: 16px;
   }
 
   /* The sheet owns the bottom here, so the scale and the attribution move up
-     beside the toolbar and the zoom: visible whether the sheet is open or shut. */
+     beside the toolbar and the zoom, taking the toolbar's measured height so a
+     wrapped row never lands on top of them. */
   .maplibregl-ctrl-bottom-left {
-    left: 10px;
+    left: max(10px, env(safe-area-inset-left));
     bottom: auto;
-    top: 52px;
+    top: calc(var(--toolbar-h, 34px) + 30px);
   }
 
   .maplibregl-ctrl-bottom-right {
     bottom: auto;
-    top: 84px;
+    right: max(10px, env(safe-area-inset-right));
+    top: calc(var(--toolbar-h, 34px) + 62px);
   }
 
   /* The credits are a paragraph here, not a line: they wrap instead of running

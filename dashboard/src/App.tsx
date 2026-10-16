@@ -21,7 +21,9 @@ import {
   removeVertex,
 } from './area';
 import type { LngLat } from './area';
-import { Panel } from './components/Panel';
+import type { Place } from './geocode';
+import { Panel, HOVER_CAPABLE } from './components/Panel';
+import { PlaceSearch } from './components/PlaceSearch';
 
 const IDLE_LOAD: LoadState = {
   phase: 'idle',
@@ -52,12 +54,14 @@ export default function App() {
   const [notice, setNotice] = createSignal<string | null>(null);
   const [nodes, setNodes] = createSignal<Float32Array | null>(null);
   const [viewKey, setViewKey] = createSignal(0);
-  const [basemap, setBasemap] = createSignal<Basemap>('sheet');
+  const [basemap, setBasemap] = createSignal<Basemap>('topo');
   const [locating, setLocating] = createSignal<'idle' | 'busy' | 'shown'>('idle');
   const [panelOpen, setPanelOpen] = createSignal(true);
   const [searching, setSearching] = createSignal(false);
   const [hoveredRoute, setHoveredRoute] = createSignal<number | null>(null);
   const [pinnedRoute, setPinnedRoute] = createSignal<number | null>(null);
+  /** The point a tap asked about, held until the visitor answers. */
+  const [pendingDelete, setPendingDelete] = createSignal<number | null>(null);
   /** A pinned route outlives the pointer; hover is only a preview. */
   const selectedRoute = () => pinnedRoute() ?? hoveredRoute();
   /** The camera frames the course once per search unless the visitor moves it. */
@@ -88,6 +92,8 @@ export default function App() {
   /** A press that never moves is a click; anything else belongs to the map. */
   const TAP_SLOP_PX = 6;
   let tap: { pointerId: number; x: number; y: number; moved: boolean } | null = null;
+  /** The same rule on a vertex handle: a press that never moves asks to delete. */
+  let vertexPress: { index: number; x: number; y: number; moved: boolean } | null = null;
 
   let areaFrame = 0;
   function requestArea(): void {
@@ -131,6 +137,7 @@ export default function App() {
 
   function applySnapshot(next: LngLat[] | null): void {
     stopSearch(true);
+    setPendingDelete(null);
     setSelectedVertex(null);
     setArea(next);
     requestArea();
@@ -190,11 +197,15 @@ export default function App() {
     courseMap.onRouteClick = (rank) => {
       setPinnedRoute(rank);
       if (rank === null) return;
-      document
-        .querySelector(`.route[data-rank="${rank}"]`)
-        ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      // Instant, not smooth: a tap that lands while the panel is still gliding
+      // is spent stopping the glide instead of doing what it was aimed at.
+      document.querySelector(`.route[data-rank="${rank}"]`)?.scrollIntoView({ block: 'nearest' });
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPendingDelete(null);
+        return;
+      }
       if (!(event.metaKey || event.ctrlKey) || event.target instanceof HTMLInputElement) return;
       const key = event.key.toLowerCase();
       if (key === 'z' && event.shiftKey) {
@@ -290,6 +301,9 @@ export default function App() {
         const point = pointerOf(event);
         if (Math.hypot(point.x - tap.x, point.y - tap.y) > TAP_SLOP_PX) tap.moved = true;
       }
+      if (vertexPress && Math.hypot(event.clientX - vertexPress.x, event.clientY - vertexPress.y) > TAP_SLOP_PX) {
+        vertexPress.moved = true;
+      }
       const index = dragging();
       const current = area();
       if (index === null) {
@@ -329,13 +343,21 @@ export default function App() {
           remember();
           setArea(placed);
           setNodeCount(0);
-          courseMap.fitToArea(placed);
+          // One frame on: MapLibre stops any camera flight it finds while it is
+          // still finishing the press that started one, so a flight begun in
+          // this handler is cancelled on a touch screen.
+          requestAnimationFrame(() => courseMap?.fitToArea(placed));
           requestArea();
           requestNodes();
           return;
         }
       }
+      const pressed = vertexPress;
+      vertexPress = null;
       endDrag();
+      // The press never moved, so nothing was dragged: it was a click on the
+      // handle, which asks before it removes.
+      if (pressed && !pressed.moved) setPendingDelete(pressed.index);
     };
 
     const onPointerCancel = () => {
@@ -355,7 +377,27 @@ export default function App() {
     window.addEventListener('pointercancel', onPointerCancel, { capture: true });
     window.addEventListener('blur', onPointerCancel);
 
+    // The answer to a click on a point stays up until the visitor goes elsewhere.
+    const dismissDelete = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('.confirm')) return;
+      setPendingDelete(null);
+    };
+    window.addEventListener('pointerdown', dismissDelete, { capture: true });
+
+    // The map's scale and credits are pinned under the toolbar, which is one row
+    // on a wide screen, two on a phone and taller again while a search is open.
+    // They take its measured height rather than a guess at it.
+    const toolbar = document.querySelector('.map__toolbar');
+    const measured = new ResizeObserver(() => {
+      if (toolbar) {
+        container.style.setProperty('--toolbar-h', `${Math.round(toolbar.getBoundingClientRect().height)}px`);
+      }
+    });
+    if (toolbar) measured.observe(toolbar);
+
     onCleanup(() => {
+      measured.disconnect();
+      window.removeEventListener('pointerdown', dismissDelete, { capture: true });
       container.removeEventListener('contextmenu', allowContextMenu, { capture: true });
       container.removeEventListener('pointerdown', onPointerDown, { capture: true });
       window.removeEventListener('pointermove', onPointerMove, { capture: true });
@@ -372,6 +414,7 @@ export default function App() {
     setSelectedVertex(index);
     setDragging(index);
     courseMap?.setPanEnabled(false);
+    vertexPress = { index, x: event.clientX, y: event.clientY, moved: false };
   }
 
   let lastInteractiveNodes = 0;
@@ -400,6 +443,7 @@ export default function App() {
     }
     remember();
     stopSearch(true);
+    setPendingDelete(null);
     setArea(removeVertex(current, index));
     setSelectedVertex(null);
     requestArea();
@@ -411,6 +455,7 @@ export default function App() {
     stopSearch(true);
     setPinnedRoute(null);
     setHoveredRoute(null);
+    setPendingDelete(null);
     setArea(null);
     setSelectedVertex(null);
     setRoutes([]);
@@ -449,6 +494,16 @@ export default function App() {
     const chosen = routes().find((route) => route.rank === rank);
     if (!chosen) return;
     downloadGpx([chosen], `zill-route-${rank}.gpx`, new Date());
+  }
+
+  /** A row's click chooses a climb, which means wanting to see it. */
+  function focusRoute(rank: number): void {
+    const chosen = routes().find((route) => route.rank === rank);
+    if (chosen) courseMap?.focusRoute(chosen);
+  }
+
+  function goToPlace(place: Place): void {
+    courseMap?.showPlace({ lng: place.lng, lat: place.lat }, place.zoom);
   }
 
   function startSearch(): void {
@@ -578,7 +633,7 @@ export default function App() {
         distanceM={distanceM()}
         notice={notice()}
         panelOpen={panelOpen()}
-        onTogglePanel={() => setPanelOpen((open) => !open)}
+        onPanelChange={setPanelOpen}
         searching={searching()}
         searchProgress={searchProgress()}
         selectedRoute={selectedRoute()}
@@ -589,17 +644,27 @@ export default function App() {
         onStop={stopSearch}
         onSelectRoute={setHoveredRoute}
         onPinRoute={setPinnedRoute}
+        onFocusRoute={focusRoute}
         onExport={exportRoute}
       />
       <div class="map">
         <div class="map__canvas" ref={mapContainer} />
         <div class="map__toolbar">
-          <div class="toolbar__group" role="group" aria-label="basemap">
+          <div class="toolbar__group" role="group" aria-label="ground">
             <button
               type="button"
               class="toolbar__button"
-              aria-pressed={basemap() === 'sheet'}
-              onClick={() => setBasemap('sheet')}
+              aria-pressed={basemap() === 'shade'}
+              onClick={() => setBasemap('shade')}
+              title="the relief shading with the names over it"
+            >
+              Shade
+            </button>
+            <button
+              type="button"
+              class="toolbar__button"
+              aria-pressed={basemap() === 'topo'}
+              onClick={() => setBasemap('topo')}
             >
               Topo
             </button>
@@ -612,6 +677,7 @@ export default function App() {
               Satellite
             </button>
           </div>
+          <PlaceSearch onPick={goToPlace} />
           <button
             type="button"
             class="toolbar__button toolbar__button--icon"
@@ -674,7 +740,7 @@ export default function App() {
                   event.stopPropagation();
                   startDrag(index, event);
                 }}
-                on:pointerenter={() => setHoveredVertex(index)}
+                on:pointerenter={() => HOVER_CAPABLE && setHoveredVertex(index)}
                 on:pointerleave={() => setHoveredVertex((current) => (current === index ? null : current))}
                 on:focus={() => setHoveredVertex(index)}
                 on:blur={() => setHoveredVertex((current) => (current === index ? null : current))}
@@ -694,6 +760,35 @@ export default function App() {
               }}
             >
               drag to move · <b>shift-click</b> or Delete to remove · drag an edge to add a point
+            </div>
+          </Show>
+          {/* A click on a point asks first: the map has no other way to take one
+              back on a touch screen, where there is no Delete key. */}
+          <Show when={pendingDelete() !== null}>
+            <div
+              class="confirm"
+              role="dialog"
+              aria-label={`delete point ${(pendingDelete() ?? 0) + 1}?`}
+              style={{
+                left: `${vertexPoints()[pendingDelete() ?? 0]?.x ?? 0}px`,
+                top: `${vertexPoints()[pendingDelete() ?? 0]?.y ?? 0}px`,
+              }}
+            >
+              <span class="confirm__ask">delete point {(pendingDelete() ?? 0) + 1}?</span>
+              <button
+                type="button"
+                class="confirm__delete"
+                // MapLibre takes focus for its canvas on the press that opened
+                // this, so the keyboard lands here on the next turn instead.
+                ref={(element) => setTimeout(() => element.focus({ preventScroll: true }), 0)}
+                onClick={() => {
+                  const index = pendingDelete();
+                  setPendingDelete(null);
+                  if (index !== null) removeVertexAt(index);
+                }}
+              >
+                delete
+              </button>
             </div>
           </Show>
         </Show>

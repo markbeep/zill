@@ -133,9 +133,13 @@ for a new feature.
 **The One Overprint Rule.** Exactly one colour carries data. If it is not the course, a live figure,
 or a progress fill, it is ink. Terrain tints belong to the map's own layers, never to the panel.
 
-**The Ground Rule.** The basemap is swisstopo's own product over its relief shading — the greyscale
-sheet by default, the aerial image on request — credited © swisstopo. It is never restyled, tinted
-purple, or replaced with a darker "dashboard" basemap.
+**The Ground Rule.** Every basemap is swisstopo's own product over its relief shading, credited
+© swisstopo: the shading on its own, the greyscale sheet, and the aerial image. Only what is on
+screen is fetched. The greyscale sheet prints its own names; the other two borrow swisstopo's names
+layer from the zoom where it is written names rather than a field of point symbols, and carry no
+names at all below that — nothing is washed over a ground to lend it names. A ground is never
+restyled, tinted purple, or replaced with a darker "dashboard" basemap, and no third-party map is
+ever layered over it.
 
 **The Sheet-Ends-At-Paper Rule.** Where the swisstopo tiles stop, the map becomes the panel's own
 paper: the camera is bounded to the data's extent and its zoom floor is the level at which that
@@ -175,20 +179,32 @@ The floor is the widest view that keeps it in frame, so the frame is always over
 edge where they stop, and a drag pulls against the rectangle rather than leaving it. The map's own chrome (toolbar, scale, attribution) starts
 clear of the sheet and stays there. The panel is a single scrolling column of hairline-separated
 blocks in reading order - area figures, search controls, the ranked routes, the legend - and never
-grows cards or tabs. Below 900 px the sheet lies along the bottom at up to 62 dvh over the same
-untouched map; the block order is identical in both.
+grows cards or tabs. Below 900 px the sheet lies along the bottom over the same untouched map; the
+block order is identical in both. The toolbar carries the three grounds, the place search, locate,
+undo, redo and clear, and takes the second row it needs on a phone rather than crushing its cells:
+its gaps, and the empty half of a search cell that has grown to fill a row, belong to the map, so a
+tap there still lands on the ground.
 
 Space is a four-step rhythm (5/8/14/16 px inside blocks, 16 px block padding) with 14 px between
 figure rows. Blocks are separated by a full-width 1 px `{colors.rule}` border, and every row inside
 the figure table carries the same rule across its top edge.
+
+On a phone the sheet's height belongs to the visitor: the head is its handle, a pull sets any height
+up to 82 dvh, and a pull that finishes in the bottom 13 dvh shuts it - nothing short of the bottom of
+the screen takes it away. Anything above that is kept exactly as it was left, however small, and the
+height is remembered. Its default is 52 dvh, a little under where it used to sit, so more of the map
+is visible without touching anything. The sheet keeps clear of the home indicator, and the map's own
+chrome sits under the toolbar at whatever height the toolbar has wrapped to rather than at a guessed
+offset.
 
 ## Elevation & Depth
 
 There are no shadows anywhere and no translucency in the panel: the interface is flat paper on a
 flat map. Depth is expressed by hairlines, by the purple tint over terrain, and by z-order on the
 map (terrain → area line and tint → start-node pinpricks → route lines → edge handles → vertices →
-rank badges). The only layered surfaces are the two raster basemap layers, where relief shading sits
-at 50 % under the sheet at 88 %.
+rank badges). The only layered surfaces are the raster grounds: relief shading at 38 % under the sheet
+at 74 % when the sheet is the ground, at 88 % when the shading is the ground alone, and the aerial
+image at 85 % over that same 38 % shading.
 
 ### Named Rules
 **The Flat-By-Default Rule.** A new surface is flat at rest and flat under interaction. Nothing gains
@@ -199,8 +215,8 @@ a shadow, a blur or a raised state; state is shown by fill, rule weight, or the 
 Radius 0 on every control: inputs, buttons, segmented toggles, the action, toolbar buttons, progress
 rules and the bar inside each route row are rectangles. Circles are reserved for the course's own
 notation, and only there: area vertices (a paper disc with a 2.25 px overprint ring, 3 px when
-selected), hollow mid-edge handles (4 px, 1.5 px ring), and the 20 px rank badge worn at a climb's
-summit. No border below 1 px and no dashes anywhere.
+selected), hollow mid-edge handles (4 px, 1.5 px ring), the 20 px rank badge worn at a climb's summit,
+and the 18 px play mark where the chosen climb sets off. No border below 1 px and no dashes anywhere.
 
 The two lines that carry the course — the drawn area's edge (solid 2 px) and each route (2.6 px) —
 sit on a paper casing (5 px and 5.4 px at 0.66–0.7 opacity). That is map-making's own device for
@@ -221,12 +237,16 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
 - **States:** an unavailable control shows no fill at all — the fill means work is happening, so a
   disabled action is a hairline box with muted text, never a purple one.
 - **Map controls:** MapLibre's navigation and scale controls, kept in their stock rendering, plus
-  basemap, locate, undo and redo controls in paper boxes with hairline borders and 11 px uppercase
-  labels (icons carry a lowercase `title` and `aria-label`).
+  ground, search, locate, undo and redo controls in paper boxes with hairline borders and 11 px
+  uppercase labels (icons carry a lowercase `title` and `aria-label`).
 - **Vertex handles:** 28 px invisible buttons positioned over the drawn vertices - the pointer target
   and the keyboard path (Tab to reach, arrow keys to nudge by 5 m, shift+arrows 25 m, Delete or
-  shift-click removes; a new point comes from dragging an edge). A tooltip appears above the focused
-  or hovered vertex: drag to move · shift-click or delete to remove · drag an edge to add a point.
+  shift-click removes at once; a new point comes from dragging an edge). A click or tap that never
+  moved asks first, in a paper box over the point: `delete point 3?` beside a single `delete`, the
+  destructive choice focused, Escape or a tap anywhere else dismissing. One button, because leaving
+  without deleting is what the rest of the screen already does. On a touch screen there is no Delete
+  key, so that question is the only way back from a point. A tooltip appears above a hovered vertex,
+  or a focused one: drag to move · shift-click or delete to remove · drag an edge to add a point.
 - **Pointer cursors:** `grab` over a vertex, `copy` over an edge (a press and drag bends the figure
   there), `move` inside the area, `pointer` over a route line, and the map's own cursor elsewhere.
 - **Refused edits speak:** removing a point from a triangle is refused with the reason on screen
@@ -235,7 +255,9 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
 ### Browser and map chrome
 - **MapLibre controls:** rebuilt in the world's terms — radius 0, hairline border, paper ground, no
   drop ring, the overprint focus ring instead of the stock blue glow; the scale and attribution boxes
-  take the same paper, hairline and 10 px type.
+  take the same paper, hairline and 10 px type. The attribution's info glyph is the button itself,
+  sitting on the box's centre line with the copy MapLibre paints into the corner removed: in a box
+  that wraps to two lines the two part ways, and only one of them opens the credits.
 - **Browser surfaces:** `::selection` uses the overprint veil, the caret is overprint, and the panel's
   scrollbar is thin, rule-coloured and square-cornered. No default chrome survives.
 
@@ -245,9 +267,28 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
   filled ink and set in paper.
 - **Focus:** the overprint ring at 2 px with a 2 px offset, never a browser-default outline.
 
-### Basemap and location controls
-- **Segments:** `TOPO` / `SATELLITE` in one hairline group, the pressed one filled ink — the same
-  control language as the panel's fields, not MapLibre's stock chrome.
+### Basemap, search and location controls
+- **Segments:** `SHADE` / `TOPO` / `SATELLITE` in one hairline group, the pressed one filled ink — the
+  same control language as the panel's fields, not MapLibre's stock chrome. `SHADE` is the relief
+  shading on its own, `TOPO` the greyscale sheet, `SATELLITE` the aerial image. One ground is on at a
+  time, so nothing the visitor is not looking at is fetched. The sheet prints its own names; the other
+  two wear swisstopo's names layer from z12 up — white-haloed labels, legible over pale shading and
+  dark imagery — and below that they simply carry no names, because the same layer is a field of point
+  symbols there and a field of symbols is not a map.
+- **Place search:** a magnifier that is one toolbar cell wide until it is used. Clicking it unfolds a
+  focused field in place — on a phone the field takes the row's spare width, still sitting between the
+  ground segments and locate — and typing folds out the answers below the toolbar: hairline rows in
+  paper, arrow keys and Enter to choose, Escape to fold it away, `searching.` / `no place by that name`
+  / `the place search could not be reached` in the same muted 11 px as every other status. Names come
+  from swisstopo's own gazetteer, address and municipality services, keyless and credited on the map's
+  frame; a label ends at the communes the name covers, because a directory is not a place. Choosing one
+  flies the camera to it, at a closeness taken from what the result *is* (an address close enough to
+  read the street), and plants no mark: a chip on the ground would only repeat the name the ground
+  already carries.
+- **The sheet's handle:** on a phone the panel head is a handle, not just a header: a pull sets the
+  sheet's height, a tap folds it, and the button says `hide` / `show` for everything that cannot pull.
+  The fold waits for the frame after the tap, so the click the browser still owes that tap lands on the
+  head rather than on whatever the collapse moved underneath it.
 - **Undo and redo:** icon controls (a returning arrow each way, 14 px stroke at 1.6, `currentColor`),
   each disabled while its stack is empty and each staying visible even when the figure has been
   cleared — a clear is itself a step. Ctrl/⌘+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes; both stacks hold
@@ -261,14 +302,20 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
   asking. The visitor's position is a paper disc with a 2.5 px overprint ring over a 12 % overprint
   accuracy halo; it is never animated and never follows without being asked again.
 - **Icon controls:** icon-only buttons carry an `aria-label` and a `title`, and keep the toolbar's
-  hairline box at a 26 px minimum so the row stays a ruled set of cells.
+  hairline box at a 26 px minimum so the row stays a ruled set of cells. Every cell of that row —
+  button, icon control, or the search field once it opens — wears one control height
+  (`--control-h`, 27 px), so opening the search never grows the row or shifts its neighbours, however
+  large the type inside it has to be.
 
 ### Route Rows
 - **Shape:** flat rows separated by hairlines, each a full-width button with its own `GPX` control
   beside it. Hovering previews — a row hover draws its route as a 9 px overprint line over the ramped
-  one, a route hover selects its row — and clicking **pins**: clicking a route line scrolls its row
-  into view and keeps it selected after the pointer leaves, while clicking the empty sheet or the row
-  again releases it.
+  one, a route hover selects its row — and clicking **pins**: choosing a row also frames that climb, so
+  the camera lands on the line the visitor just picked, clear of the sheet. Clicking a route line
+  scrolls its row into view (instantly, so a second tap is never spent stopping a glide) and keeps it
+  selected after the pointer leaves, while clicking the empty sheet or the row again releases it. A
+  press that begins on the sheet's own chrome never reaches the map, so folding the sheet cannot drop
+  the pinned climb.
 - **Export:** every row downloads its own GPX 1.1 track, matching the CLI's `writeGpx` shape.
 - **Content:** rank in a ringed badge, the start's coordinates in tabular figures under a `START`
   label, the gain in 15 px bold with an `HM` unit, a 4 px gradient bar whose span is derived from the
@@ -276,6 +323,11 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
   `distance · Ø gradient · start→summit elevation`.
 - **Gradient bar:** the span is announced in the legend footnote ("… span 0–50 %, the strongest climb
   found so far"); a bar pinned at 100 % for every row means the span is wrong, not the data.
+- **Start mark:** the climb the visitor is looking at wears an 18 px paper ring at its lowest point,
+  with a 9 px play triangle turned to the bearing of its first metres (drawn from the route's own
+  first two points), so the course reads as a route rather than as a line. It belongs to the pinned
+  climb alone: releasing the pin takes it away, and it is documented in the legend, because it is the
+  one mark on the map that is not a rank.
 - **Collision:** badges keep 20 px of clearance, nudged along their own route's tail (sideways or
   back along the final segment) with a roomiest-slot fallback, and re-laid on every camera move; the
   legend says "set beside the summit", not "at" it. Only the ten strongest climbs wear one.
@@ -312,11 +364,13 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
 - **Do** answer every search. A small or flat area has no climb to find, so it ranks the strongest
   lines its distance allows, however little they rise, and shows their real gains rather than an empty
   list or an apology.
-- **Do** keep the map's greyscale sheet and credited attribution untouched beneath the course, and
-  credit everything on the frame: the swisstopo product in use, the walkable graph's OpenStreetMap
-  data, and MapLibre as the renderer.
-- **Do** return every camera flight, fill transition and the panel's collapse to 0 ms under
-  `prefers-reduced-motion`.
+- **Do** keep the map's grounds and credited attribution untouched beneath the course, and credit
+  everything on the frame: the swisstopo product in use, the walkable graph's OpenStreetMap data, and
+  MapLibre as the renderer.
+- **Do** fetch only the ground the visitor is looking at: there are three, one is on, and the
+  attribution lists what that one loads.
+- **Do** let a phone set the sheet's height by pulling its head, and remember that height next visit.
+- **Do** return every camera flight, fill transition and the panel's collapse to 0 ms under `prefers-reduced-motion`.
 - **Do** keep the node field and the route ramp data-driven: the field thins with the camera, the
   ramp follows gradient. Neither may become decoration.
 
@@ -327,3 +381,6 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
 - **Don't** use the overprint decoratively — a purple element that carries no data is a bug.
 - **Don't** hide the reason a control is unavailable, or let a search appear to run with no start
   nodes inside the area.
+- **Don't** collapse or move a control on the release of the press that used it, and never before the
+  click that press is owed has been delivered: the browser hands that click to whatever the layout has
+  put under the finger by then, which is how a tap meant for `hide` ends up on the map.

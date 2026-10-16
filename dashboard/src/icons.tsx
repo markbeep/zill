@@ -36,3 +36,27 @@ export function RedoIcon() {
     </svg>
   );
 }
+
+export function SearchIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" {...STROKE}>
+      <circle cx="8.7" cy="8.7" r="5.2" />
+      <path d="M12.6 12.6 16.8 16.8" />
+    </svg>
+  );
+}
+
+export function CloseIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="11" height="11" aria-hidden="true" {...STROKE}>
+      <path d="M5 5l10 10M15 5 5 15" />
+    </svg>
+  );
+}
+
+/** The play mark worn at a route's start, turned to the direction it leaves in.
+ *  The map builds its markers out of DOM by hand rather than out of JSX, so this
+ *  drawing travels as markup: the icon belongs with the rest of the set even
+ *  where the consumer cannot import a component. */
+export const ROUTE_START_MARK =
+  '<svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d="M5 0.5 9.5 9.5 5 7.4 0.5 9.5Z" fill="currentColor"/></svg>';
