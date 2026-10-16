@@ -1,6 +1,8 @@
 # Zill
 
-Generates graphs from OpenStreetMap data optimized for elevation-based routing.
+Generates graphs from OpenStreetMap data optimized for elevation-based routing. Check out the interactive dashboard at [https://zl.rkma.dev](https://zl.rkma.dev) to find the steepest routes near you!
+
+![Dashboard screenshot](assets/dashboard.webp)
 
 ## Structure
 
@@ -93,12 +95,16 @@ npm install
 npm run dev     # http://localhost:5173
 ```
 
-Two assets must exist before the first run; both are symlinked into `dashboard/public/`:
+Two assets must exist before the first run, and the recipes that build them link both into
+`dashboard/public/`, which is what the dev server serves:
 
 ```sh
 just wasm    # find/zig-out/bin/zill.wasm
 just graph   # data/switzerland_walkable_100m.zl.tar.gz (~66 MB, 3.9M nodes)
 ```
+
+A fresh checkout has neither link, and the image never relies on them: it compiles the module itself
+and copies it into the public tree, then refuses to build if `dist/zill.wasm` is missing.
 
 The page downloads that archive, unpacks it with a streaming gunzip, hands the bytes to the module,
 and lets it build its adjacency and spatial indexes. Every stage reports itself in the panel with
@@ -113,53 +119,6 @@ search mode: the strongest climb that starts inside the drawn area within the en
 (metres, default 1000), and up to 60 distinct climbs are kept, so a whole area fills with route
 lines. Line width and strength follow each climb's average gradient — the steep ground reads first
 without a second colour — and every route downloads as GPX 1.1 from its row.
-
-Start nodes are always drawn, however large the area: the worker reads them out of the module in
-pages and merges nodes that share a cell of the area's own grid, the map merges further by screen
-cell, and the field stays a fine texture. The basemap switches between the swisstopo sheet and the
-swisstopo aerial image, `Locate` puts the visitor's own position on the map, and the camera is
-clamped to the walkable extent plus about 40 km of headroom on every side, which is far inside the
-swisstopo sheets (they carry real map for more than a hundred kilometres past the country), so the
-frame is always over tiles and never over the edge where they stop. The zoom floor is the widest view
-that keeps that rectangle in frame, and a drag pulls against it instead of leaving it. The panel is only ever drawn over the map, so opening or closing it
-moves no map pixel, and framing calls reserve the strip it covers. Credits ride in the map's
-attribution: the swisstopo product in use (pixelkarte grau, SWISSIMAGE), the graph's OpenStreetMap
-data, and MapLibre. The panel collapses to its own head as a 47 px strip and the map
-never moves while it does: the sheet is drawn over a map that keeps the whole frame, so opening and
-closing it cannot shift or resize a single map pixel.
-Rank is carried by a numbered badge — every route is drawn in one overprint purple over the
-greyscale swisstopo sheet (© swisstopo; the basemap is served straight from the official WMTS and
-needs no key).
-
-`-Dignore-loss`, `-Dcompute-a-star` and `-Dwasm-optimize` reach both the CLI and the browser module,
-since both are built from the same library and options module.
-
-### Docker
-
-The image builds only the frontend: the build stage compiles the WebAssembly module with Zig and
-builds the bundle with npm, so it never copies a prebuilt `dist/`. The runtime image is Alpine plus
-busybox `httpd` and nothing else, about 10 MB.
-
-The graph is the one thing that is not built here (that needs the OSM and DHM25 pipeline) and it is
-never baked into the image either. Mount it next to the app at run time:
-
-```sh
-just graph                  # data/switzerland_walkable_100m.zl.tar.gz (~66 MB, 3.9M nodes)
-just docker                 # build the wasm module, the bundle and the image
-docker run --rm -p 8080:8080 \
-  -v "$PWD/data/switzerland_walkable_100m.zl.tar.gz:/app/graph.tar.gz:ro" \
-  zill-dashboard
-```
-
-The page fetches that mount as `/graph.tar.gz`. With no mount the panel reports the missing graph and
-the path it expected, and stops there instead of loading. The build stage needs network access for
-Zig's dependencies.
-
-Every push to `main` runs the tests and pushes the image as `<user>/zill:latest`
-(`.github/workflows/build.yml`), so deploying is a `docker pull` plus the graph mount. The workflow
-reads `DOCKER_HUB_USERNAME` and `DOCKER_HUB_ACCESS_TOKEN` from the repository secrets; the graph is
-never part of the image, so CI builds it without the 66 MB input. busybox `httpd` serves no compression
-and no range requests; put nginx or Caddy in front for anything but a single visitor.
 
 ## Convert - Generate .zl file from OSM data
 
