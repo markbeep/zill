@@ -57,7 +57,7 @@ function storedSheet(): number {
   return SHEET_DEFAULT;
 }
 
-const swiss = (value: number, digits: number) => value.toLocaleString('de-CH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+export const swiss = (value: number, digits: number) => value.toLocaleString('de-CH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
 function megabytes(bytes: number): string {
   return swiss(bytes / (1024 * 1024), 1);

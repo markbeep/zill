@@ -10,6 +10,7 @@ import type { LoadState, Route, SearchStats } from './wasm';
 import {
   areaM2,
   degreesPerMeter,
+  haversineMeters,
   initialTriangle,
   insertVertex,
   insidePolygon,
@@ -22,7 +23,7 @@ import {
 } from './area';
 import type { LngLat } from './area';
 import type { Place } from './geocode';
-import { Panel, HOVER_CAPABLE } from './components/Panel';
+import { Panel, HOVER_CAPABLE, swiss } from './components/Panel';
 import { PlaceSearch } from './components/PlaceSearch';
 
 const IDLE_LOAD: LoadState = {
@@ -35,6 +36,10 @@ const IDLE_LOAD: LoadState = {
   nodes: 0,
   edges: 0,
 };
+
+/** An edge shorter than this on screen carries no label: lengths drawn over a
+ *  figure a few dozen pixels wide would cover the whole figure. */
+const EDGE_LABEL_MIN_PX = 48;
 
 export default function App() {
   let mapContainer!: HTMLDivElement;
@@ -87,6 +92,27 @@ export default function App() {
       hectares: areaM2(current) / 10_000,
       perimeterKm: perimeterM(current) / 1000,
     };
+  });
+
+  /**
+   * Each edge's length at its midpoint, for as long as a drag is in flight and
+   * no longer. The same great-circle metric the search uses, so a number read
+   * off the figure is the number the run will walk.
+   */
+  const edgeLabels = createMemo(() => {
+    if (dragging() === null) return [];
+    const current = area();
+    const screen = vertexPoints();
+    if (!current || screen.length !== current.length) return [];
+    const labels: { x: number; y: number; text: string }[] = [];
+    for (let i = 0; i < current.length; i += 1) {
+      const a = screen[i];
+      const b = screen[(i + 1) % screen.length];
+      if (Math.hypot(b.x - a.x, b.y - a.y) < EDGE_LABEL_MIN_PX) continue;
+      const km = haversineMeters(current[i], current[(i + 1) % current.length]) / 1000;
+      labels.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, text: `${swiss(km, km < 1 ? 2 : 1)} km` });
+    }
+    return labels;
   });
 
   /** A press that never moves is a click; anything else belongs to the map. */
@@ -719,6 +745,13 @@ export default function App() {
           </button>
         </div>
         <Show when={area()}>
+          <Index each={edgeLabels()}>
+            {(label) => (
+              <span class="edge-length" style={{ left: `${label().x}px`, top: `${label().y}px` }}>
+                {label().text}
+              </span>
+            )}
+          </Index>
           <div class="map__vertices" role="group" aria-label="search area points">
             <Index each={area() ?? []}>
               {(_, index) => (

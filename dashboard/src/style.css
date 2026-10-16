@@ -127,6 +127,25 @@ body {
   font-size: 10px;
 }
 
+/* Edge lengths, read off the figure only while a drag is in flight: small and
+   faint, because a whole area's worth of numbers must never cover the map. */
+.edge-length {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.5;
+  white-space: nowrap;
+  pointer-events: none;
+  /* A soft white edge, so the number keeps its distance from whatever ground it
+     has been dragged over without turning into a plate. */
+  text-shadow:
+    0 0 4px var(--paper),
+    0 0 5px var(--paper),
+    0 0 6px var(--paper);
+}
+
 .map__vertices {
   position: absolute;
   inset: 0;
