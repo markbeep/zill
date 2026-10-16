@@ -338,7 +338,8 @@ export function Panel(props: PanelProps) {
           <p class="legend__foot">
             elevation gain is counted from each route's own start, along the walkable network
             (~100 m resolution). gradient bars span 0–{gradientSpan()} %, the strongest climb found
-            so far. every route downloads as gpx. baselayer © swisstopo.
+            so far. every route downloads as gpx. baselayer © swisstopo. source on{' '}
+            <a href="https://github.com/markbeep/zill">github</a>.
           </p>
         </details>
       </section>

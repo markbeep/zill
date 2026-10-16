@@ -28,12 +28,14 @@ RUN cd dashboard && npm ci --no-audit --no-fund
 
 COPY find/ find/
 COPY dashboard/ dashboard/
+# public/dashboard.webp is a symlink into here, and the bundle copies it through.
+COPY assets/ assets/
 # public/ is what the bundle is copied from, and the dev tree fills two of its
 # entries with symlinks into ignored build directories - a fresh checkout has
 # neither. The graph belongs to the run-time mount, so it is dropped; the wasm is
 # built here and copied in, so the image is its own source of truth for it.
 RUN rm -f dashboard/public/graph.tar.gz dashboard/public/zill.wasm \
-    && zig build --build-file find/build.zig wasm \
+    && zig build --build-file find/build.zig wasm -Dwasm-optimize=ReleaseFast \
     && cp find/zig-out/bin/zill.wasm dashboard/public/zill.wasm \
     && cd dashboard && npm run build
 

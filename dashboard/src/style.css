@@ -754,6 +754,10 @@ body {
   color: var(--ink-muted);
 }
 
+.legend__foot a {
+  color: inherit;
+}
+
 /* Browser surfaces, in the world's terms: no default chrome survives. */
 ::selection {
   background: var(--overprint-veil);

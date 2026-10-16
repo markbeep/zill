@@ -10,5 +10,7 @@
 !dashboard/vite.config.ts
 !dashboard/public
 !dashboard/public/**
+!assets
+!assets/**
 !dashboard/src
 !dashboard/src/**

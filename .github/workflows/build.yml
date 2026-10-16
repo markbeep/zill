@@ -24,7 +24,7 @@ jobs:
         run: zig build --build-file find/build.zig test
 
       - name: Build the browser module
-        run: zig build --build-file find/build.zig wasm
+        run: zig build --build-file find/build.zig wasm -Dwasm-optimize=ReleaseFast
 
       - name: Smoke-test the module
         run: node find/test/wasm_smoke.mjs
