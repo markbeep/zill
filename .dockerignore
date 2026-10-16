@@ -1,0 +1,14 @@
+*
+!find/build.zig
+!find/build.zig.zon
+!find/src
+!find/src/**
+!dashboard/package.json
+!dashboard/package-lock.json
+!dashboard/index.html
+!dashboard/tsconfig.json
+!dashboard/vite.config.ts
+!dashboard/public
+!dashboard/public/**
+!dashboard/src
+!dashboard/src/**

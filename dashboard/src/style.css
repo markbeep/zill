@@ -1,0 +1,906 @@
+@font-face {
+  font-family: 'Archivo Narrow';
+  src: url('/fonts/archivo-narrow-400-700.woff2') format('woff2-variations');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* Course Over Ground: terrain keeps its own colours, the course brings one. */
+  --paper: #fbfaf7;
+  --ink: #14161a;
+  --ink-muted: #5b6068;
+  --rule: #c9c7c4;
+  --rule-soft: #e4e2de;
+  --overprint: #8e5cc0;
+  --overprint-tint: rgba(142, 92, 192, 0.12);
+  --overprint-veil: rgba(142, 92, 192, 0.32);
+  --danger: #a3362c;
+
+  --panel-w: 360px;
+  --font: 'Archivo Narrow', 'Arial Narrow', system-ui, sans-serif;
+  --hairline: 1px solid var(--rule);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  position: relative;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+:focus-visible {
+  outline: 2px solid var(--overprint);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- map ---- */
+
+/* The map fills the frame and sits behind the sheet at a fixed size: collapsing
+   the panel changes nothing about it, so nothing on the map can jump or resize. */
+.map {
+  position: absolute;
+  inset: 0;
+  /* Paper, not a third colour: where the swisstopo sheets end, the map simply
+     becomes the same ground the panel sits on. */
+  background: var(--paper);
+}
+
+.map__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.map__tooltip {
+  position: absolute;
+  z-index: 5;
+  transform: translate(-50%, calc(-100% - 12px));
+  padding: 5px 7px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.map__tooltip b {
+  font-weight: 700;
+}
+
+.map__attribution {
+  font-size: 10px;
+}
+
+.map__vertices {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Real buttons over the drawn vertices: pointer targets and the keyboard path. */
+.vertex-handle {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+
+.vertex-handle:active {
+  cursor: grabbing;
+}
+
+.vertex-handle:focus-visible {
+  outline: 2px solid var(--overprint);
+  outline-offset: -3px;
+}
+
+/* Pinned inside the map, which the sheet partly covers: the toolbar starts
+   after the sheet and stays there, open or closed. */
+.map__toolbar {
+  position: absolute;
+  top: 12px;
+  left: calc(var(--panel-w) + 12px);
+  z-index: 4;
+  display: flex;
+  gap: 6px;
+}
+
+.toolbar__button {
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.toolbar__group {
+  display: flex;
+}
+
+.toolbar__group .toolbar__button + .toolbar__button {
+  border-left: 0;
+}
+
+.toolbar__button[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.toolbar__button[disabled] {
+  border-color: var(--rule);
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
+.route-badge-holder,
+.route-start-holder {
+  display: block;
+}
+
+.route-start {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--overprint);
+  border-radius: 50%;
+  outline: 2px solid rgba(251, 250, 247, 0.85);
+  background: var(--paper);
+  color: var(--overprint);
+}
+
+.route-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--overprint);
+  border-radius: 50%;
+  /* A ring, not a shadow: separates the mark from dense contours. */
+  outline: 2px solid rgba(251, 250, 247, 0.85);
+  background: var(--paper);
+  color: var(--overprint);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.route-badge.is-selected {
+  background: var(--overprint);
+  color: var(--paper);
+}
+
+/* -------------------------------------------------------------- panel ---- */
+
+/* The panel is out of flow, so collapsing it is its own business: only its
+   height moves, from the full frame down to its head. */
+.panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  width: var(--panel-w);
+  height: 100dvh;
+  background: var(--paper);
+  border-right: var(--hairline);
+  overflow: hidden;
+  transition: height 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.panel--closed {
+  height: 47px;
+}
+
+.panel__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The sheet covers the map's left column, so the map's own left-hand chrome
+   starts after it and stays there whether the sheet is open or closed. */
+.maplibregl-ctrl-bottom-left {
+  left: calc(var(--panel-w) + 10px);
+}
+
+.panel__block {
+  padding: 14px 16px;
+  border-bottom: var(--hairline);
+}
+
+.panel__block--tight {
+  padding: 10px 16px;
+}
+
+.panel__head {
+  display: flex;
+  /* The caption and the button sit on the wordmark's baseline: one line of
+     type, not three boxes that happen to share a row. */
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+
+
+.panel__tab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Same inset as the panel head, so HIDE and SHOW sit in the same place. */
+  padding: 10px 16px;
+}
+
+.panel__tab-figures {
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.panel__tab .toolbar__button,
+.panel__head .toolbar__button {
+  align-self: center;
+  margin-left: auto;
+  min-width: 52px;
+  text-align: center;
+}
+
+.toolbar__button--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  padding: 5px 6px;
+}
+
+/* The legend folds away: the panel is for work, not for reference material. */
+.fold > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold > summary::after {
+  content: ' +';
+}
+
+.fold[open] > summary::after {
+  content: ' –';
+}
+
+.fold[open] > summary {
+  margin-bottom: 10px;
+}
+
+.status--notice {
+  color: var(--ink);
+}
+
+.wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.wordmark span {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--ink-muted);
+}
+
+.purpose {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.label {
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+/* figure table ------------------------------------------------------------ */
+
+.figures {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  margin-top: 8px;
+}
+
+.figures > dt,
+.figures > dd {
+  margin: 0;
+  padding: 5px 0;
+  border-top: var(--hairline);
+}
+
+.figures > dt {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.figures > dd {
+  text-align: right;
+  font-size: 13px;
+}
+
+.figures > dd.is-live {
+  color: var(--overprint);
+  font-weight: 700;
+}
+
+/* controls ---------------------------------------------------------------- */
+
+.controls {
+  display: grid;
+  gap: 10px;
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: stretch;
+  border: 1px solid var(--ink);
+}
+
+.field input {
+  border: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  background: transparent;
+  color: inherit;
+  min-width: 0;
+}
+
+.field input:focus-visible {
+  outline-offset: -2px;
+}
+
+.field__unit {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-left: 1px solid var(--ink);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.segments {
+  display: grid;
+  grid-auto-flow: column;
+  border: 1px solid var(--ink);
+}
+
+.segments button {
+  border: 0;
+  border-left: 1px solid var(--ink);
+  padding: 7px 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.segments button:first-child {
+  border-left: 0;
+}
+
+.segments button[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* the search control is also the load and progress instrument -------------- */
+
+.action {
+  position: relative;
+  display: block;
+  width: 100%;
+  border: 1px solid var(--ink);
+  padding: 10px 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.action__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--overprint-tint);
+  transition: width 120ms linear;
+}
+
+.action__inner {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.action[data-state='ready'] .action__fill {
+  background: var(--overprint);
+}
+
+.action[data-state='ready'] .action__inner {
+  color: var(--paper);
+}
+
+.action[data-state='running'] .action__fill {
+  background: var(--ink);
+}
+
+.action[data-state='running'] .action__inner {
+  color: var(--paper);
+}
+
+.action[disabled] {
+  cursor: not-allowed;
+  border-color: var(--rule);
+  color: var(--ink-muted);
+}
+
+/* An unavailable control shows no fill and keeps readable ink: the fill means
+   work is happening, and the ready state's paper-on-overprint text would be
+   invisible without it. */
+.action[disabled] .action__fill {
+  background: transparent;
+}
+
+.action[disabled] .action__inner {
+  color: var(--ink-muted);
+}
+
+.status {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.status--error {
+  color: var(--danger);
+}
+
+.rule-progress {
+  position: relative;
+  height: 2px;
+  margin-top: 6px;
+  background: var(--rule-soft);
+}
+
+.rule-progress > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--overprint);
+}
+
+/* ranked course lines ----------------------------------------------------- */
+
+.routes {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.route-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px;
+  border-top: var(--hairline);
+}
+
+.route {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.route__body {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.route:first-child {
+  border-top: 0;
+}
+
+.route__rank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: start;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--overprint);
+  border-radius: 50%;
+  color: var(--overprint);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.route__head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.route__name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route__gain {
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.route__gain small {
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.route__foot {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 5px;
+}
+
+.route__bar {
+  height: 4px;
+  background: var(--rule-soft);
+}
+
+.route__bar > i {
+  display: block;
+  height: 100%;
+  background: var(--overprint);
+}
+
+.route__figures {
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.route.is-selected {
+  background: var(--overprint-tint);
+}
+
+.route.is-selected .route__name,
+.route.is-selected .route__gain {
+  font-weight: 700;
+}
+
+.route__gpx {
+  border: var(--hairline);
+  background: transparent;
+  padding: 3px 5px;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.route__gpx:hover,
+.route__gpx:focus-visible {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.routes__empty {
+  padding: 10px 0;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+/* legend ------------------------------------------------------------------ */
+
+.legend {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend li {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.legend__mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+}
+
+.legend__line {
+  width: 18px;
+  height: 2px;
+  background: var(--overprint);
+}
+
+.legend__badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--overprint);
+  border-radius: 50%;
+  color: var(--overprint);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.legend__handle {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--overprint);
+  border-radius: 50%;
+}
+
+.legend__vertex {
+  width: 11px;
+  height: 11px;
+  background: var(--overprint);
+  border-radius: 50%;
+}
+
+.legend__pins {
+  width: 18px;
+  height: 10px;
+  background-image: radial-gradient(var(--overprint) 1px, transparent 1.2px);
+  background-size: 4px 4px;
+}
+
+.legend__foot {
+  margin: 10px 0 0;
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+/* Browser surfaces, in the world's terms: no default chrome survives. */
+::selection {
+  background: var(--overprint-veil);
+}
+
+input {
+  caret-color: var(--overprint);
+}
+
+.panel {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) var(--rule-soft);
+}
+
+.panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.panel::-webkit-scrollbar-track {
+  background: var(--rule-soft);
+}
+
+.panel::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: 0;
+}
+
+/* MapLibre's stock chrome carries a 4px radius, a drop ring and a blue glow;
+   the world's controls are radius 0, hairline and overprint. */
+.maplibregl-ctrl-group {
+  border: var(--hairline);
+  border-radius: 0;
+  background: var(--paper);
+  box-shadow: none;
+}
+
+.maplibregl-ctrl-group button {
+  border-radius: 0;
+  background: transparent;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top: var(--hairline);
+}
+
+.maplibregl-ctrl-group button:focus,
+.maplibregl-ctrl-group button:focus-visible {
+  outline: 2px solid var(--overprint);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+
+.maplibregl-ctrl button .maplibregl-ctrl-icon {
+  filter: none;
+}
+
+.maplibregl-ctrl-scale,
+.maplibregl-ctrl-attrib {
+  background: var(--paper);
+  border: var(--hairline);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 10px;
+}
+
+.maplibregl-ctrl-scale {
+  border-top: 0;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: var(--ink-muted);
+}
+
+/* ------------------------------------------------------------ responsive -- */
+
+@media (max-width: 900px) {
+  /* The sheet lives at the bottom over the map, the same way the desktop panel
+     lives at the left over it: the map keeps its size either way. */
+  .panel {
+    position: absolute;
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    height: auto;
+    max-height: 62dvh;
+    border-right: 0;
+    border-top: var(--hairline);
+    transition: max-height 220ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .panel--closed {
+    height: auto;
+    max-height: 44px;
+  }
+
+  /* The sheet lies along the bottom here, so the toolbar keeps the top-left. */
+  .map__toolbar {
+    left: 12px;
+  }
+
+  /* The sheet owns the bottom here, so the scale and the attribution move up
+     beside the toolbar and the zoom: visible whether the sheet is open or shut. */
+  .maplibregl-ctrl-bottom-left {
+    left: 10px;
+    bottom: auto;
+    top: 52px;
+  }
+
+  .maplibregl-ctrl-bottom-right {
+    bottom: auto;
+    top: 84px;
+  }
+
+  /* The credits are a paragraph here, not a line: they wrap instead of running
+     off the screen. MapLibre pads the compact box with content-box, so the cap
+     has to be a border-box one or the padding eats the whole screen anyway. */
+  .maplibregl-ctrl-attrib.maplibregl-compact,
+  .maplibregl-ctrl-attrib {
+    box-sizing: border-box;
+    max-width: min(84vw, 340px);
+  }
+
+  .maplibregl-ctrl-attrib-inner {
+    max-width: 100%;
+    white-space: normal;
+    line-height: 1.35;
+    overflow-wrap: break-word;
+  }
+
+  .panel__block {
+    padding: 12px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action__fill,
+  .panel {
+    transition: none;
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px
+  ;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

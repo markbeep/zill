@@ -1,0 +1,7 @@
+# Written by the just recipes: links into the Zig build output and the graph
+# archive. Nothing in a fresh checkout has them, and the Dockerfile builds and
+# copies the wasm itself, so the image never depends on them.
+public/zill.wasm
+public/graph*
+node_modules
+dist

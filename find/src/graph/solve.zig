@@ -1,6 +1,5 @@
 const std = @import("std");
 const s = @import("shared.zig");
-const graph = @import("graph.zig");
 const options = @import("options");
 
 pub const Coord = struct {
@@ -15,32 +14,38 @@ pub const PathState = struct {
 };
 
 pub const EndCondition = union(enum) {
+    /// Longest path whose total distance stays under this bound, maximizing gain.
     max_distance: u32,
+    /// Minimum distance needed to climb this much.
     at_least_elevation: u32,
 };
 
 // =============================
 
+/// Every node within `max_radius_m` of the target, in graph order. Linear scan:
+/// the CLI's radius mode has no spatial index by design.
 pub fn getCloseNodes(
     allocator: std.mem.Allocator,
     progress: std.Progress.Node,
     target: Coord,
     max_radius_m: f64,
-    dyn: graph.DynamicGraph,
+    graph: anytype,
 ) ![]u32 {
     var close_nodes = try std.ArrayList(u32).initCapacity(allocator, 1000);
-    const p = progress.start("searching for close-by nodes", dyn.nodes.items.len);
+    errdefer close_nodes.deinit(allocator);
+    const p = progress.start("searching for close-by nodes", graph.nodeCount());
     defer p.end();
 
-    for (dyn.nodes.items, 0..) |n, i| {
-        const dist = haversineMeters(target, .{ .lat = n.lat, .lon = n.lon });
+    for (0..graph.nodeCount()) |i| {
+        const n: u32 = @intCast(i);
+        const dist = haversineMeters(target, .{ .lat = graph.nodeLat(n), .lon = graph.nodeLon(n) });
         if (dist <= max_radius_m) {
-            try close_nodes.append(allocator, @intCast(i));
+            try close_nodes.append(allocator, n);
         }
         p.completeOne();
     }
 
-    return try close_nodes.toOwnedSlice(allocator);
+    return close_nodes.toOwnedSlice(allocator);
 }
 
 pub const Result = struct {
@@ -60,10 +65,11 @@ pub fn findBestStartingPoint(
     io: std.Io,
     progress: std.Progress.Node,
     start_indices: []u32,
-    dyn: graph.DynamicGraph,
+    graph: anytype,
     end_condition: EndCondition,
     max_results: usize,
 ) ![]Result {
+    const G = @TypeOf(graph);
     const ResultMsg = union(enum) {
         done: anyerror!Result,
     };
@@ -74,11 +80,9 @@ pub fn findBestStartingPoint(
             start_idx: u32,
             _allocator: std.mem.Allocator,
             _end_condition: EndCondition,
-            _nodes: []const s.Node,
-            _edges: []const s.Edge,
-            _outgoing: []std.ArrayList(u32),
+            _graph: G,
         ) !Result {
-            const elevation = try Dijkstra(.Elevation).run(_allocator, start_idx, _end_condition, _nodes, _edges, _outgoing);
+            const elevation = try Dijkstra(.Elevation).run(_allocator, _graph, start_idx, _end_condition);
             p.completeOne();
             return .{ .elevation = elevation, .idx = start_idx };
         }
@@ -87,7 +91,6 @@ pub fn findBestStartingPoint(
     var ordered = std.PriorityQueue(Result, void, Result.compareForResult).empty;
     defer ordered.deinit(allocator);
 
-    // var buf: [start_indices.len]Result = undefined;
     const buf = try allocator.alloc(ResultMsg, start_indices.len);
     defer allocator.free(buf);
     var select = std.Io.Select(ResultMsg).init(io, buf);
@@ -97,7 +100,7 @@ pub fn findBestStartingPoint(
     defer p.end();
 
     for (start_indices) |start_idx| {
-        select.async(.done, TaskBatch.run, .{ p, start_idx, allocator, end_condition, dyn.nodes.items, dyn.edges.items, dyn.node_edges.items });
+        select.async(.done, TaskBatch.run, .{ p, start_idx, allocator, end_condition, graph });
     }
 
     const accum_progress = progress.start("accumulating results", start_indices.len);
@@ -125,11 +128,12 @@ pub const DijkstraReturn = enum {
 };
 
 /// Finds a path from `start_idx` to the optimal elevation reachable without exceeding the given `end_condition`.
-/// The optimization target is determined by `optimize`: `.Maximize` targets the highest elevation while
-/// `.Minimize` targets elevations with the least total change.
 /// The return type is determined by `dtype`: `.Elevation` returns the optimal elevation as an `i64`,
-/// while `.Path` returns a `PathDetails` struct containing the path indices (in order from start to end),
-/// total distance, and total elevation. Caller owns any returned slices.
+/// while `.Path` returns a `PathDetails` struct containing the path indices (in order from start to end)
+/// plus total distance and elevation. Caller owns any returned slices.
+///
+/// `graph` may be any type exposing `nodeCount`, `nodeLat`, `nodeLon`, `outDegree` and `halfEdge`
+/// (both `DynamicGraph` and `PackedGraph` do), so the CLI and the browser run the same code.
 pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
     const ReturnType = switch (dtype) {
         .Elevation => i64,
@@ -139,12 +143,11 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
     return struct {
         pub fn run(
             allocator: std.mem.Allocator,
+            graph: anytype,
             start_idx: u32,
             end_condition: EndCondition,
-            nodes: []const s.Node,
-            edges: []const s.Edge,
-            outgoing: []std.ArrayList(u32),
         ) !ReturnType {
+            const G = @TypeOf(graph);
             const VisitedNode = struct {
                 idx: u32,
                 distance: i64,
@@ -154,7 +157,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
 
             const Context = struct {
                 visited: *const std.AutoHashMap(u32, VisitedNode),
-                nodes: []const s.Node,
+                graph: G,
                 start_idx: u32,
 
                 fn compareForDistance(ctx: @This(), u_idx: u32, v_idx: u32) std.math.Order {
@@ -164,16 +167,18 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                     var u_h: i64 = 0;
                     var v_h: i64 = 0;
                     if (options.compute_a_star) {
-                        // compute dist to start
-                        const start = ctx.nodes[ctx.start_idx];
-                        const start_coord = Coord{ .lat = start.lat, .lon = start.lon };
-                        const u_n = ctx.nodes[u_idx];
-                        const u_coord = Coord{ .lat = u_n.lat, .lon = u_n.lon };
-                        const v_n = ctx.nodes[v_idx];
-                        const v_coord = Coord{ .lat = v_n.lat, .lon = v_n.lon };
-
-                        u_h = @trunc(haversineMeters(start_coord, u_coord));
-                        v_h = @trunc(haversineMeters(start_coord, v_coord));
+                        const start = Coord{
+                            .lat = ctx.graph.nodeLat(ctx.start_idx),
+                            .lon = ctx.graph.nodeLon(ctx.start_idx),
+                        };
+                        u_h = @trunc(haversineMeters(start, .{
+                            .lat = ctx.graph.nodeLat(u_idx),
+                            .lon = ctx.graph.nodeLon(u_idx),
+                        }));
+                        v_h = @trunc(haversineMeters(start, .{
+                            .lat = ctx.graph.nodeLat(v_idx),
+                            .lon = ctx.graph.nodeLon(v_idx),
+                        }));
                     }
 
                     return std.math.order(u.distance + u_h, v.distance + v_h);
@@ -188,7 +193,11 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
             try visited.put(start_idx, initial);
             var best: VisitedNode = initial;
 
-            var pq = std.PriorityQueue(u32, Context, Context.compareForDistance).initContext(Context{ .visited = &visited, .start_idx = start_idx, .nodes = nodes });
+            var pq = std.PriorityQueue(u32, Context, Context.compareForDistance).initContext(Context{
+                .visited = &visited,
+                .start_idx = start_idx,
+                .graph = graph,
+            });
             try pq.push(arena.allocator(), start_idx);
 
             while (pq.pop()) |current_idx| {
@@ -198,27 +207,28 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                     break;
                 }
 
-                for (outgoing[current_idx].items) |outgoing_edge_idx| {
-                    const edge = edges[outgoing_edge_idx];
+                const degree = graph.outDegree(current_idx);
+                for (0..degree) |k| {
+                    const edge = graph.halfEdge(current_idx, @intCast(k));
                     const new_distance = u.distance + edge.distance;
-                    const new_elevation = if (options.ignore_elevation_loss) u.elevation + edge.elev_gain else u.elevation + edge.elev_gain - edge.elev_loss;
+                    const new_elevation = if (options.ignore_elevation_loss) u.elevation + edge.gain else u.elevation + edge.gain - edge.loss;
 
                     if (end_condition == .max_distance and new_distance > end_condition.max_distance) {
                         continue;
                     }
 
-                    if (visited.get(edge.v_idx)) |v| {
+                    if (visited.get(edge.to)) |v| {
                         if (new_distance >= v.distance) continue;
                     }
 
                     const new_visited = VisitedNode{
-                        .idx = edge.v_idx,
+                        .idx = edge.to,
                         .distance = new_distance,
                         .elevation = new_elevation,
-                        .prev = edge.u_idx,
+                        .prev = current_idx,
                     };
-                    try visited.put(edge.v_idx, new_visited);
-                    try pq.push(arena.allocator(), edge.v_idx);
+                    try visited.put(edge.to, new_visited);
+                    try pq.push(arena.allocator(), edge.to);
 
                     if (new_elevation > best.elevation) {
                         best = new_visited;
@@ -274,7 +284,7 @@ pub fn haversineMeters(p1: Coord, p2: Coord) f64 {
     return r_earth * _c;
 }
 
-pub fn writeGpx(io: std.Io, file_path: []const u8, name: []const u8, nodes: []const s.Node, c: PathDetails) !void {
+pub fn writeGpx(io: std.Io, file_path: []const u8, name: []const u8, graph: anytype, c: PathDetails) !void {
     var f = try std.Io.Dir.cwd().createFile(io, file_path, .{});
     defer f.close(io);
 
@@ -292,11 +302,14 @@ pub fn writeGpx(io: std.Io, file_path: []const u8, name: []const u8, nodes: []co
     });
 
     for (c.indices) |node_idx| {
-        const n = nodes[node_idx];
-        if (n.elev) |ele| {
-            try out.print("<trkpt lat=\"{d:.7}\" lon=\"{d:.7}\"><ele>{d}</ele></trkpt>\n", .{ n.lat, n.lon, ele });
+        if (graph.nodeElev(node_idx)) |ele| {
+            try out.print("<trkpt lat=\"{d:.7}\" lon=\"{d:.7}\"><ele>{d}</ele></trkpt>\n", .{
+                graph.nodeLat(node_idx),
+                graph.nodeLon(node_idx),
+                ele,
+            });
         } else {
-            try out.print("<trkpt lat=\"{d:.7}\" lon=\"{d:.7}\"/>\n", .{ n.lat, n.lon });
+            try out.print("<trkpt lat=\"{d:.7}\" lon=\"{d:.7}\"/>\n", .{ graph.nodeLat(node_idx), graph.nodeLon(node_idx) });
         }
     }
 
@@ -313,18 +326,16 @@ const DijkstraTestType = enum {
     HighestInt,
 };
 
-fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, comptime g: *const graph.DynamicGraph) type {
+fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, comptime g: *const @import("packed_graph.zig").PackedGraph) type {
     switch (dtype) {
         .HighestPath => {
             return struct {
                 fn run(allocator: std.mem.Allocator) void {
                     const result = Dijkstra(.Path).run(
                         allocator,
+                        g.*,
                         node_idx,
                         .{ .max_distance = 1_000 },
-                        g.nodes.items,
-                        g.edges.items,
-                        g.node_edges.items,
                     ) catch @panic("dijkstra2 failed");
                     defer allocator.free(result.indices);
                 }
@@ -335,11 +346,9 @@ fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, co
                 fn run(allocator: std.mem.Allocator) void {
                     _ = Dijkstra(.Elevation).run(
                         allocator,
+                        g.*,
                         node_idx,
                         .{ .max_distance = 1_000 },
-                        g.nodes.items,
-                        g.edges.items,
-                        g.node_edges.items,
                     ) catch @panic("dijkstra2 failed");
                 }
             };
@@ -347,23 +356,28 @@ fn GenBenchDijkstra(comptime dtype: DijkstraTestType, comptime node_idx: u32, co
     }
 }
 
-var bench_g: graph.DynamicGraph = undefined;
+var bench_graph: @import("packed_graph.zig").PackedGraph = undefined;
 
 test "benchmark distance dijkstra" {
     const testing = std.testing;
     const zbench = @import("zbench");
+    const packed_graph = @import("packed_graph.zig");
 
-    // One-time graph load: use a fast arena-backed allocator. The debug
-    // `testing.allocator` makes loading the 199 MB graph take tens of seconds.
+    // Skipped when the generated graph is not present: `just generate` builds it.
+    const file = std.Io.Dir.cwd().openFile(testing.io, "data/switzerland_walkable_100m.zl", .{ .mode = .read_only }) catch return error.SkipZigTest;
+    defer file.close(testing.io);
+    const stat = file.stat(testing.io) catch return error.SkipZigTest;
+
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
-
-    var f = try std.Io.Dir.cwd().openFile(testing.io, "data/switzerland_walkable.zl", .{ .mode = .read_only });
-    defer f.close(testing.io);
-
+    const bytes = arena.allocator().alloc(u8, @intCast(stat.size)) catch return error.SkipZigTest;
     var buffer: [1024]u8 = undefined;
-    var reader = f.reader(testing.io, &buffer);
-    bench_g = try graph.DynamicGraph.fromReader(arena.allocator(), &reader.interface);
+    var reader = file.reader(testing.io, &buffer);
+    reader.interface.readSliceAll(bytes) catch return error.SkipZigTest;
+
+    bench_graph = packed_graph.PackedGraph.init(arena.allocator(), bytes) catch return error.SkipZigTest;
+    defer bench_graph.deinit();
+    bench_graph.index() catch return error.SkipZigTest;
 
     var bench = zbench.Benchmark.init(testing.allocator, .{});
     defer bench.deinit();
@@ -374,12 +388,10 @@ test "benchmark distance dijkstra" {
         break :blk rand.intRangeAtMost(u32, 0, 10000);
     };
 
-    // ======== Setup done ========
-
-    const Bench1 = GenBenchDijkstra(.HighestPath, target, &bench_g);
+    const Bench1 = GenBenchDijkstra(.HighestPath, target, &bench_graph);
     try bench.add("Benchmark path determining Dijkstra", Bench1.run, .{ .track_allocations = true });
 
-    const Bench2 = GenBenchDijkstra(.HighestInt, target, &bench_g);
+    const Bench2 = GenBenchDijkstra(.HighestInt, target, &bench_graph);
     try bench.add("Benchmark peak finder Dijkstra (new impl)", Bench2.run, .{ .track_allocations = true });
 
     try bench.run(testing.io, std.Io.File.stderr());

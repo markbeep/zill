@@ -1,0 +1,703 @@
+import { createEffect, createMemo, createSignal, Index, onCleanup, onMount, Show } from 'solid-js';
+import type maplibregl from 'maplibre-gl';
+import { CourseMap } from './map';
+import type { Basemap } from './map';
+import { clusterByScreen } from './cluster';
+import { LocateIcon, RedoIcon, UndoIcon } from './icons';
+import { downloadGpx } from './gpx';
+import { DEDUP_PERMILLE, MAX_RESULT_ROUTES, PINPRICK_CELL_PX, ZillWorker } from './wasm';
+import type { LoadState, Route, SearchStats } from './wasm';
+import {
+  areaM2,
+  degreesPerMeter,
+  initialTriangle,
+  insertVertex,
+  insidePolygon,
+  MIN_VERTICES,
+  moveVertex,
+  nearestEdge,
+  nearestVertex,
+  perimeterM,
+  removeVertex,
+} from './area';
+import type { LngLat } from './area';
+import { Panel } from './components/Panel';
+
+const IDLE_LOAD: LoadState = {
+  phase: 'idle',
+  received: 0,
+  total: 0,
+  inflated: 0,
+  graphBytes: 0,
+  progress: 0,
+  nodes: 0,
+  edges: 0,
+};
+
+export default function App() {
+  let mapContainer!: HTMLDivElement;
+  let courseMap: CourseMap | undefined;
+  let worker: ZillWorker | undefined;
+
+  const [area, setArea] = createSignal<LngLat[] | null>(null);
+  const [selectedVertex, setSelectedVertex] = createSignal<number | null>(null);
+  const [dragging, setDragging] = createSignal<number | null>(null);
+  const [hoveredVertex, setHoveredVertex] = createSignal<number | null>(null);
+  const [mapVersion, setMapVersion] = createSignal(0);
+  const [load, setLoad] = createSignal<LoadState>(IDLE_LOAD);
+  const [nodeCount, setNodeCount] = createSignal(0);
+  const [stats, setStats] = createSignal<SearchStats | null>(null);
+  const [routes, setRoutes] = createSignal<Route[]>([]);
+  const [distanceM, setDistanceM] = createSignal(1000);
+  const [notice, setNotice] = createSignal<string | null>(null);
+  const [nodes, setNodes] = createSignal<Float32Array | null>(null);
+  const [viewKey, setViewKey] = createSignal(0);
+  const [basemap, setBasemap] = createSignal<Basemap>('sheet');
+  const [locating, setLocating] = createSignal<'idle' | 'busy' | 'shown'>('idle');
+  const [panelOpen, setPanelOpen] = createSignal(true);
+  const [searching, setSearching] = createSignal(false);
+  const [hoveredRoute, setHoveredRoute] = createSignal<number | null>(null);
+  const [pinnedRoute, setPinnedRoute] = createSignal<number | null>(null);
+  /** A pinned route outlives the pointer; hover is only a preview. */
+  const selectedRoute = () => pinnedRoute() ?? hoveredRoute();
+  /** The camera frames the course once per search unless the visitor moves it. */
+  let cameraOwned = true;
+  let framedRun = false;
+  /** Set when an edit stops a run; cleared when the next run starts. */
+  let discardReports = false;
+
+  const ready = createMemo(() => load().phase === 'ready');
+
+  const vertexPoints = createMemo(() => {
+    mapVersion();
+    const current = area();
+    const map = courseMap;
+    if (!current || !map) return [];
+    return map.toScreen(current);
+  });
+  const figures = createMemo(() => {
+    const current = area();
+    if (!current) return null;
+    return {
+      vertices: current.length,
+      hectares: areaM2(current) / 10_000,
+      perimeterKm: perimeterM(current) / 1000,
+    };
+  });
+
+  /** A press that never moves is a click; anything else belongs to the map. */
+  const TAP_SLOP_PX = 6;
+  let tap: { pointerId: number; x: number; y: number; moved: boolean } | null = null;
+
+  let areaFrame = 0;
+  function requestArea(): void {
+    cancelAnimationFrame(areaFrame);
+    areaFrame = requestAnimationFrame(() => {
+      const current = area();
+      if (!current || !ready()) {
+        setNodeCount(0);
+        setNodes(null);
+        return;
+      }
+      worker?.post({ type: 'area', area: current });
+    });
+  }
+
+  /**
+   * The start-node field is always drawn, so it is a separate query. While the
+   * figure is being dragged it reads one page per call and the settle reads the
+   * whole field, which keeps the dots moving with the shape.
+   */
+  function requestNodes(interactive = false): void {
+    const current = area();
+    if (!current || !ready()) {
+      setNodes(null);
+      return;
+    }
+    worker?.post({ type: 'nodes', area: current, interactive });
+  }
+
+  /** Every state the figure has been in, including "no figure". */
+  const undoStack: (LngLat[] | null)[] = [];
+  const redoStack: (LngLat[] | null)[] = [];
+  const [undoDepth, setUndoDepth] = createSignal(0);
+  const [redoDepth, setRedoDepth] = createSignal(0);
+  let lastNudgeSnapshot = 0;
+
+  const snapshot = (): LngLat[] | null => {
+    const current = area();
+    return current ? current.map((point) => ({ ...point })) : null;
+  };
+
+  function applySnapshot(next: LngLat[] | null): void {
+    stopSearch(true);
+    setSelectedVertex(null);
+    setArea(next);
+    requestArea();
+    requestNodes();
+  }
+
+  /** Snapshot before a change. `coalesce` folds a burst of nudges into one. */
+  function remember(coalesce = false): void {
+    if (coalesce) {
+      const now = performance.now();
+      if (now - lastNudgeSnapshot < 600) return;
+      lastNudgeSnapshot = now;
+    }
+    undoStack.push(snapshot());
+    redoStack.length = 0;
+    setRedoDepth(0);
+    if (undoStack.length > 20) undoStack.shift();
+    setUndoDepth(undoStack.length);
+  }
+
+  function undo(): void {
+    if (undoStack.length === 0) {
+      announce('nothing to undo');
+      return;
+    }
+    redoStack.push(snapshot());
+    setRedoDepth(redoStack.length);
+    const previous = undoStack.pop() ?? null;
+    setUndoDepth(undoStack.length);
+    applySnapshot(previous);
+  }
+
+  function redo(): void {
+    if (redoStack.length === 0) {
+      announce('nothing to redo');
+      return;
+    }
+    undoStack.push(snapshot());
+    setUndoDepth(undoStack.length);
+    const next = redoStack.pop() ?? null;
+    setRedoDepth(redoStack.length);
+    applySnapshot(next);
+  }
+
+  onMount(() => {
+    courseMap = new CourseMap(mapContainer);
+    let badgeFrame = 0;
+    courseMap.map.on('move', () => {
+      setMapVersion((version) => version + 1);
+      cancelAnimationFrame(badgeFrame);
+      badgeFrame = requestAnimationFrame(() => courseMap?.layoutBadges());
+    });
+    // The pinprick field is re-thinned only when the camera settles.
+    courseMap.map.on('moveend', () => setViewKey((key) => key + 1));
+    courseMap.map.on('zoomend', () => setViewKey((key) => key + 1));
+    courseMap.onRouteHover = (rank) => setHoveredRoute(rank);
+    courseMap.onRouteClick = (rank) => {
+      setPinnedRoute(rank);
+      if (rank === null) return;
+      document
+        .querySelector(`.route[data-rank="${rank}"]`)
+        ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.target instanceof HTMLInputElement) return;
+      const key = event.key.toLowerCase();
+      if (key === 'z' && event.shiftKey) {
+        event.preventDefault();
+        redo();
+      } else if (key === 'z' || key === 'y') {
+        event.preventDefault();
+        if (key === 'y') redo();
+        else undo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    onCleanup(() => window.removeEventListener('keydown', onKeyDown));
+    courseMap.map.on('dragstart', () => {
+      cameraOwned = false;
+    });
+    courseMap.map.on('zoomstart', (event: { originalEvent?: unknown }) => {
+      if (event.originalEvent) cameraOwned = false;
+    });
+    if (import.meta.env.DEV) {
+      // Development handle for inspecting layers and camera in the browser.
+      (globalThis as unknown as { zillMap?: maplibregl.Map }).zillMap = courseMap.map;
+    }
+
+    worker = new ZillWorker();
+    worker.onLoad = (state) => {
+      setLoad(state);
+      if (state.phase === 'ready') requestArea();
+    };
+    worker.onArea = (count) => {
+      setNodeCount(count);
+    };
+    worker.onNodes = (points) => setNodes(points.length > 0 ? points : null);
+    worker.onError = (message) => announce(message);
+    worker.onSearch = (next, nextRoutes, changed) => {
+      if (discardReports) return;
+      setStats(next);
+      if (changed) setRoutes(nextRoutes);
+      if (next.finished) setSearching(false);
+      if (changed && nextRoutes.length > 0 && !framedRun && cameraOwned) {
+        framedRun = true;
+        courseMap?.fitToAreaAndRoutes(area(), nextRoutes);
+      }
+    };
+    void courseMap.ready().then(() => {
+      setMapVersion((version) => version + 1);
+      setViewKey((key) => key + 1);
+      worker?.post({ type: 'load' });
+    });
+
+    const container = mapContainer;
+    const pointerOf = (event: PointerEvent) => {
+      const rect = container.getBoundingClientRect();
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || !courseMap) return;
+      // Map chrome and our own controls own their clicks: the attribution
+      // toggle, the zoom buttons and the toolbar must never place an area.
+      if ((event.target as HTMLElement).closest('.maplibregl-ctrl, .map__toolbar, button')) return;
+      const point = pointerOf(event);
+      const current = area();
+      if (!current) {
+        // Do not claim the gesture: a drag here is a pan. Whether this becomes
+        // the first area is decided on release.
+        tap = { pointerId: event.pointerId, x: point.x, y: point.y, moved: false };
+        return;
+      }
+      const screen = courseMap.toScreen(current);
+      const vertex = nearestVertex(screen, point);
+      if (vertex !== null && event.shiftKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        removeVertexAt(vertex);
+        return;
+      }
+      const edge = nearestEdge(screen, point);
+      if (edge === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      // Snapshot before the figure changes, and do not snapshot again when the
+      // drag that follows starts: the new vertex is already part of this step.
+      remember();
+      const inserted = insertVertex(current, edge, courseMap.fromScreen(point));
+      setArea(inserted);
+      setSelectedVertex(edge + 1);
+      startDrag(edge + 1, event, false);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (tap && event.pointerId === tap.pointerId) {
+        const point = pointerOf(event);
+        if (Math.hypot(point.x - tap.x, point.y - tap.y) > TAP_SLOP_PX) tap.moved = true;
+      }
+      const index = dragging();
+      const current = area();
+      if (index === null) {
+        // Say what a press would do: move a point, bend an edge, or nothing.
+        if (!courseMap || !current) {
+          courseMap?.setHoverCursor('');
+        } else if (event.target instanceof Node && container.contains(event.target)) {
+          const at = pointerOf(event);
+          const screen = courseMap.toScreen(current);
+          if (nearestVertex(screen, at) !== null) courseMap.setHoverCursor('grab');
+          else if (nearestEdge(screen, at) !== null) courseMap.setHoverCursor('copy');
+          else if (insidePolygon(screen, at)) courseMap.setHoverCursor('move');
+          else courseMap.setHoverCursor('');
+        } else {
+          courseMap.setHoverCursor('');
+        }
+      }
+      if (index === null || !courseMap) return;
+      event.preventDefault();
+      updateVertex(index, courseMap.fromScreen(pointerOf(event)));
+    };
+
+    const endDrag = () => {
+      if (dragging() === null) return;
+      setDragging(null);
+      courseMap?.setPanEnabled(true);
+      requestArea();
+      requestNodes();
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      const pending = tap;
+      if (pending && event.pointerId === pending.pointerId) {
+        tap = null;
+        if (!pending.moved && !area() && courseMap) {
+          const placed = initialTriangle(courseMap.fromScreen({ x: pending.x, y: pending.y }));
+          remember();
+          setArea(placed);
+          setNodeCount(0);
+          courseMap.fitToArea(placed);
+          requestArea();
+          requestNodes();
+          return;
+        }
+      }
+      endDrag();
+    };
+
+    const onPointerCancel = () => {
+      tap = null;
+      endDrag();
+    };
+
+    // The map's own listeners call stopPropagation on the canvas, so the drag
+    // is tracked on the window in the capture phase: a release always lands.
+    // MapLibre prevents the context menu on its canvas; stopping the event here
+    // keeps the browser's own menu available over the map.
+    const allowContextMenu = (event: MouseEvent) => event.stopPropagation();
+    container.addEventListener('contextmenu', allowContextMenu, { capture: true });
+    container.addEventListener('pointerdown', onPointerDown, { capture: true });
+    window.addEventListener('pointermove', onPointerMove, { capture: true });
+    window.addEventListener('pointerup', onPointerUp, { capture: true });
+    window.addEventListener('pointercancel', onPointerCancel, { capture: true });
+    window.addEventListener('blur', onPointerCancel);
+
+    onCleanup(() => {
+      container.removeEventListener('contextmenu', allowContextMenu, { capture: true });
+      container.removeEventListener('pointerdown', onPointerDown, { capture: true });
+      window.removeEventListener('pointermove', onPointerMove, { capture: true });
+      window.removeEventListener('pointerup', onPointerUp, { capture: true });
+      window.removeEventListener('pointercancel', onPointerCancel, { capture: true });
+      window.removeEventListener('blur', onPointerCancel);
+      worker?.terminate();
+    });
+  });
+
+  function startDrag(index: number, event: PointerEvent, snapshot = true): void {
+    event.preventDefault();
+    if (snapshot) remember();
+    setSelectedVertex(index);
+    setDragging(index);
+    courseMap?.setPanEnabled(false);
+  }
+
+  let lastInteractiveNodes = 0;
+  function updateVertex(index: number, to: LngLat): void {
+    const current = area();
+    if (!current) return;
+    setArea(moveVertex(current, index, to));
+    cancelAnimationFrame(areaFrame);
+    areaFrame = requestAnimationFrame(() => {
+      const next = area();
+      if (next && ready()) worker?.post({ type: 'area', area: next });
+    });
+    const now = performance.now();
+    if (now - lastInteractiveNodes > 140) {
+      lastInteractiveNodes = now;
+      requestNodes(true);
+    }
+  }
+
+  function removeVertexAt(index: number): void {
+    const current = area();
+    if (!current) return;
+    if (current.length <= MIN_VERTICES) {
+      announce(`an area needs at least ${MIN_VERTICES} points`);
+      return;
+    }
+    remember();
+    stopSearch(true);
+    setArea(removeVertex(current, index));
+    setSelectedVertex(null);
+    requestArea();
+    requestNodes();
+  }
+
+  function clearArea(): void {
+    remember();
+    stopSearch(true);
+    setPinnedRoute(null);
+    setHoveredRoute(null);
+    setArea(null);
+    setSelectedVertex(null);
+    setRoutes([]);
+    setStats(null);
+    setNodeCount(0);
+    setNodes(null);
+  }
+
+  function locate(): void {
+    if (!navigator.geolocation) {
+      announce('this browser exposes no location');
+      return;
+    }
+    setLocating('busy');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocating('shown');
+        courseMap?.showUserLocation(
+          { lat: position.coords.latitude, lng: position.coords.longitude },
+          position.coords.accuracy,
+        );
+        courseMap?.map.flyTo({
+          center: [position.coords.longitude, position.coords.latitude],
+          zoom: Math.max(courseMap.map.getZoom(), 13),
+        });
+      },
+      (error) => {
+        setLocating('idle');
+        announce(error.code === error.PERMISSION_DENIED ? 'location permission denied' : 'your location could not be read');
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 },
+    );
+  }
+
+  function exportRoute(rank: number): void {
+    const chosen = routes().find((route) => route.rank === rank);
+    if (!chosen) return;
+    downloadGpx([chosen], `zill-route-${rank}.gpx`, new Date());
+  }
+
+  function startSearch(): void {
+    if (load().phase === 'error') {
+      worker?.post({ type: 'load' });
+      return;
+    }
+    const current = area();
+    if (!current || !ready()) return;
+    setSearching(true);
+    setPinnedRoute(null);
+    setHoveredRoute(null);
+    discardReports = false;
+    cameraOwned = true;
+    framedRun = false;
+    worker?.post({
+      type: 'search',
+      request: {
+        area: current,
+        maxDistanceM: Math.round(distanceM()),
+        maxElevationM: 0, // the dashboard only ever searches within a distance
+        maxResults: MAX_RESULT_ROUTES,
+        dedupPermille: DEDUP_PERMILLE,
+      },
+    });
+  }
+
+  /**
+   * `discard` is for edits that invalidate the run: the worker reports one last
+   * time when it stops, and those results belong to the old figure.
+   */
+  function stopSearch(discard = false): void {
+    if (searching()) worker?.post({ type: 'stop' });
+    setSearching(false);
+    if (discard) {
+      discardReports = true;
+      setRoutes([]);
+      setStats(null);
+    }
+  }
+
+  function onVertexKey(event: KeyboardEvent, index: number): void {
+    const current = area();
+    if (!current) return;
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      removeVertexAt(index);
+      return;
+    }
+    const step = degreesPerMeter(current, event.shiftKey ? 25 : 5);
+    const point = current[index];
+    let moved: LngLat | null = null;
+    if (event.key === 'ArrowUp') moved = { lng: point.lng, lat: point.lat + step.lat };
+    else if (event.key === 'ArrowDown') moved = { lng: point.lng, lat: point.lat - step.lat };
+    else if (event.key === 'ArrowLeft') moved = { lng: point.lng - step.lng, lat: point.lat };
+    else if (event.key === 'ArrowRight') moved = { lng: point.lng + step.lng, lat: point.lat };
+    if (!moved) return;
+    event.preventDefault();
+    remember(true);
+    setSelectedVertex(index);
+    updateVertex(index, moved);
+    requestArea();
+    requestNodes();
+  }
+
+  // The drawn area drives both the map layers and the start-node query.
+  createEffect(() => {
+    const current = area();
+    mapVersion();
+    courseMap?.setArea(current, selectedVertex());
+    if (!current) return;
+    if (searching()) return;
+    requestArea();
+  });
+
+  createEffect(() => {
+    basemap();
+    courseMap?.setBasemap(basemap());
+  });
+
+  // Dense node fields are thinned in screen space: one pinprick per ~4 px cell,
+  // so a whole country's worth of nodes still reads as texture, never as blobs.
+  createEffect(() => {
+    const points = nodes();
+    viewKey();
+    const map = courseMap;
+    const shown =
+      points && map
+        ? clusterByScreen(points, (lngLat) => map.map.project(lngLat), PINPRICK_CELL_PX, 24_000)
+        : null;
+    map?.setStarts(shown);
+  });
+
+  createEffect(() => {
+    courseMap?.setRoutes(routes(), selectedRoute());
+  });
+
+  // The direction mark belongs to the route the visitor actually chose.
+  createEffect(() => {
+    const rank = pinnedRoute();
+    const chosen = rank === null ? null : routes().find((route) => route.rank === rank) ?? null;
+    courseMap?.showRouteStart(chosen);
+  });
+
+  let noticeTimer: number | undefined;
+  function announce(message: string): void {
+    setNotice(message);
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => setNotice(null), 4000);
+  }
+
+  const searchProgress = createMemo(() => {
+    const current = stats();
+    if (!current || current.total === 0) return 0;
+    return current.scanned / current.total;
+  });
+
+  return (
+    <>
+      <Panel
+        area={area()}
+        figures={figures()}
+        nodeCount={nodeCount()}
+        load={load()}
+        stats={stats()}
+        routes={routes()}
+        distanceM={distanceM()}
+        notice={notice()}
+        panelOpen={panelOpen()}
+        onTogglePanel={() => setPanelOpen((open) => !open)}
+        searching={searching()}
+        searchProgress={searchProgress()}
+        selectedRoute={selectedRoute()}
+        pinnedRoute={pinnedRoute()}
+        onDistance={setDistanceM}
+
+        onSearch={startSearch}
+        onStop={stopSearch}
+        onSelectRoute={setHoveredRoute}
+        onPinRoute={setPinnedRoute}
+        onExport={exportRoute}
+      />
+      <div class="map">
+        <div class="map__canvas" ref={mapContainer} />
+        <div class="map__toolbar">
+          <div class="toolbar__group" role="group" aria-label="basemap">
+            <button
+              type="button"
+              class="toolbar__button"
+              aria-pressed={basemap() === 'sheet'}
+              onClick={() => setBasemap('sheet')}
+            >
+              Topo
+            </button>
+            <button
+              type="button"
+              class="toolbar__button"
+              aria-pressed={basemap() === 'satellite'}
+              onClick={() => setBasemap('satellite')}
+            >
+              Satellite
+            </button>
+          </div>
+          <button
+            type="button"
+            class="toolbar__button toolbar__button--icon"
+            onClick={locate}
+            disabled={locating() === 'busy'}
+            title="show my location on the map"
+            aria-label="show my location on the map"
+          >
+            <LocateIcon />
+          </button>
+          <button
+            type="button"
+            class="toolbar__button toolbar__button--icon"
+            onClick={undo}
+            disabled={undoDepth() === 0}
+            title="undo the last change to the area (ctrl+z)"
+            aria-label="undo the last change to the area"
+          >
+            <UndoIcon />
+          </button>
+          <button
+            type="button"
+            class="toolbar__button toolbar__button--icon"
+            onClick={redo}
+            disabled={redoDepth() === 0}
+            title="redo the change that was undone (ctrl+shift+z)"
+            aria-label="redo the change that was undone"
+          >
+            <RedoIcon />
+          </button>
+          <button
+            type="button"
+            class="toolbar__button"
+            onClick={clearArea}
+            disabled={!area()}
+            title="remove the search area"
+          >
+            Clear area
+          </button>
+        </div>
+        <Show when={area()}>
+          <div class="map__vertices" role="group" aria-label="search area points">
+            <Index each={area() ?? []}>
+              {(_, index) => (
+              <button
+                type="button"
+                class="vertex-handle"
+                style={{
+                  left: `${vertexPoints()[index]?.x ?? 0}px`,
+                  top: `${vertexPoints()[index]?.y ?? 0}px`,
+                }}
+                aria-label={`point ${index + 1} of ${area()?.length}. drag to move, arrow keys to nudge, shift-click or delete to remove. dragging anywhere on an edge adds a point.`}
+                on:pointerdown={(event) => {
+                  if (event.shiftKey) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    removeVertexAt(index);
+                    return;
+                  }
+                  event.stopPropagation();
+                  startDrag(index, event);
+                }}
+                on:pointerenter={() => setHoveredVertex(index)}
+                on:pointerleave={() => setHoveredVertex((current) => (current === index ? null : current))}
+                on:focus={() => setHoveredVertex(index)}
+                on:blur={() => setHoveredVertex((current) => (current === index ? null : current))}
+                on:keydown={(event) => onVertexKey(event, index)}
+              >
+                <span class="visually-hidden">Point {index + 1}</span>
+              </button>
+              )}
+            </Index>
+          </div>
+          <Show when={hoveredVertex() !== null}>
+            <div
+              class="map__tooltip"
+              style={{
+                left: `${vertexPoints()[hoveredVertex() ?? 0]?.x ?? 0}px`,
+                top: `${vertexPoints()[hoveredVertex() ?? 0]?.y ?? 0}px`,
+              }}
+            >
+              drag to move · <b>shift-click</b> or Delete to remove · drag an edge to add a point
+            </div>
+          </Show>
+        </Show>
+      </div>
+    </>
+  );
+}

@@ -221,6 +221,7 @@ fn parseWayElevationDistance(user_data: ?*const anyopaque, way_ptr: [*c]const c.
 fn isWalkable(comptime allow_ferry: bool, way: c.readosm_way) bool {
     var walkable = false;
 
+    if (way.tags == null) return false; // readosm reports tag-less ways with a null tag array
     for (way.tags[0..@intCast(way.tag_count)]) |tag| {
         const key = std.mem.span(tag.key);
         const value = std.mem.span(tag.value);
@@ -290,6 +291,7 @@ pub fn isCycleable(comptime allow_ferry: bool, way: c.readosm_way) bool {
     var is_ferry = false;
 
     // 1. Gather relevant tags
+    if (way.tags == null) return false; // readosm reports tag-less ways with a null tag array
     for (way.tags[0..@intCast(way.tag_count)]) |tag| {
         const key = std.mem.span(tag.key);
         const value = std.mem.span(tag.value);
@@ -402,6 +404,7 @@ pub fn isRoadBikeSurface(way: c.readosm_way) bool {
     var smoothness: ?[]const u8 = null;
     var tracktype: ?[]const u8 = null;
 
+    if (way.tags == null) return false; // readosm reports tag-less ways with a null tag array
     for (way.tags[0..@intCast(way.tag_count)]) |tag| {
         const k = std.mem.span(tag.key);
         const v = std.mem.span(tag.value);

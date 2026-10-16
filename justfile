@@ -22,6 +22,34 @@ run *ARGS:
 generate *ARGS:
     zig build --build-file convert/build.zig run {{ARGS}}
 
+# find: build the browser WebAssembly module into find/zig-out/bin/zill.wasm, and
+# keep the link the dev server serves it through (the image copies the file itself).
+wasm *ARGS:
+    zig build --build-file find/build.zig wasm {{ARGS}}
+    ln -sf ../../find/zig-out/bin/zill.wasm dashboard/public/zill.wasm
+
+# find: smoke-test the browser module against a graph the test builds itself.
+wasm-smoke:
+    zig build --build-file find/build.zig wasm
+    node find/test/wasm_smoke.mjs
+
+# Package a .zl graph for the browser as data/<name>.zl.tar.gz (gzip, so the
+# client can stream it through DecompressionStream).
+graph name="switzerland_walkable_100m":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ln -sf ../../data/{{name}}.zl.tar.gz dashboard/public/graph.tar.gz
+    cd data
+    tar -cf - "{{name}}.zl" | gzip -9 > "{{name}}.zl.tar.gz"
+    ls -l "{{name}}.zl.tar.gz"
+
+# Package the dashboard as a minimal Alpine image. The image builds the wasm
+# module and the bundle itself; the graph is not part of it and is mounted at run
+# time (see the README).
+docker:
+    docker build -t zill-dashboard .
+    docker images zill-dashboard
+
 # Run the test suites of both subprojects. Note that `find` runs a zbench
 # benchmark on a 199 MB graph, which takes a long time in Debug builds.
 test:

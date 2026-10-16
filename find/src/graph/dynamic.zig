@@ -1,6 +1,8 @@
 const std = @import("std");
 const s = @import("shared.zig");
 
+/// Growable graph used by the converter while assembling a `.zl` file. Readers
+/// (CLI and wasm) use `PackedGraph`, which reads the file in place instead.
 pub const DynamicGraph = struct {
     allocator: std.mem.Allocator,
 
@@ -48,6 +50,8 @@ pub const DynamicGraph = struct {
         return idx;
     }
 
+    /// Stores one direction of a way segment. The reverse direction is derived
+    /// from it at read time, so the file holds each segment exactly once.
     pub fn addEdge(self: *DynamicGraph, u_idx: u32, v_idx: u32, elev_gain: u16, elev_loss: u16, distance: u32) !void {
         const idx: u32 = @intCast(self.edges.items.len);
         try self.edges.append(
@@ -63,106 +67,83 @@ pub const DynamicGraph = struct {
         try self.node_edges.items[u_idx].append(self.allocator, idx);
     }
 
-    pub const EdgeIterator = struct {
-        graph: *DynamicGraph,
-        edge_indices: []const u32,
-        pos: usize = 0,
-
-        pub fn next(self: *EdgeIterator) ?s.Edge {
-            if (self.pos >= self.edge_indices.len) return null;
-            const edge = self.graph.edges.items[self.edge_indices[self.pos]];
-            self.pos += 1;
-            return edge;
-        }
-    };
-
-    pub fn iterateOutgoingEdges(self: *DynamicGraph, u_idx: usize) EdgeIterator {
-        return .{
-            .graph = self,
-            .edge_indices = self.node_edges.items[u_idx].items,
-        };
+    pub inline fn nodeCount(self: *const DynamicGraph) u32 {
+        return @intCast(self.nodes.items.len);
     }
+
+    pub inline fn nodeLat(self: *const DynamicGraph, idx: u32) f32 {
+        return self.nodes.items[idx].lat;
+    }
+
+    pub inline fn nodeLon(self: *const DynamicGraph, idx: u32) f32 {
+        return self.nodes.items[idx].lon;
+    }
+
+    pub inline fn nodeElev(self: *const DynamicGraph, idx: u32) ?u16 {
+        return self.nodes.items[idx].elev;
+    }
+
+    pub inline fn outDegree(self: *const DynamicGraph, idx: u32) u32 {
+        return @intCast(self.node_edges.items[idx].items.len);
+    }
+
+    pub inline fn halfEdge(self: *const DynamicGraph, idx: u32, k: u32) s.HalfEdge {
+        const e = self.edges.items[self.node_edges.items[idx].items[k]];
+        return .{ .to = e.v_idx, .gain = e.elev_gain, .loss = e.elev_loss, .distance = e.distance };
+    }
+
+    const CHUNK = 4096;
 
     pub fn exportToWriter(self: *DynamicGraph, writer: *std.Io.Writer) !void {
-        // Header
-        const header = s.FileHeader{
-            .node_count = self.nodes.items.len,
-            .edge_count = self.edges.items.len,
-        };
-        try writer.writeAll(std.mem.asBytes(&header));
+        const n = self.nodes.items.len;
+        const e = self.edges.items.len;
+        const layout = s.Sections.init(n, e);
 
-        // Nodes
-        for (self.nodes.items) |n| {
-            const packed_node = s.PackedNode{
-                .id = n.id,
-                .lat = n.lat,
-                .lon = n.lon,
-                .elev = if (n.elev) |e| e else s.PackedNode.INVALID_ELEV,
-            };
-            try writer.writeAll(std.mem.asBytes(&packed_node));
-        }
-        // Edges
-        for (self.edges.items) |e| {
-            try writer.writeAll(std.mem.asBytes(&e));
-        }
+        const header = s.FileHeader{ .node_count = n, .edge_count = e };
+        try writer.writeAll(std.mem.asBytes(&header));
+        var pos: u64 = @sizeOf(s.FileHeader);
+
+        try padTo(writer, &pos, layout.ids);
+        for (self.nodes.items) |nd| try writeU(i64, writer, &pos, nd.id);
+        try padTo(writer, &pos, layout.lats);
+        for (self.nodes.items) |nd| try writeU(u32, writer, &pos, @bitCast(nd.lat));
+        try padTo(writer, &pos, layout.lons);
+        for (self.nodes.items) |nd| try writeU(u32, writer, &pos, @bitCast(nd.lon));
+        try padTo(writer, &pos, layout.elevs);
+        for (self.nodes.items) |nd| try writeU(u16, writer, &pos, nd.elev orelse s.INVALID_ELEV);
+
+        try padTo(writer, &pos, layout.edges_u);
+        for (self.edges.items) |ed| try writeU(u32, writer, &pos, ed.u_idx);
+        try padTo(writer, &pos, layout.edges_v);
+        for (self.edges.items) |ed| try writeU(u32, writer, &pos, ed.v_idx);
+        try padTo(writer, &pos, layout.edges_gain);
+        for (self.edges.items) |ed| try writeU(u16, writer, &pos, ed.elev_gain);
+        try padTo(writer, &pos, layout.edges_loss);
+        for (self.edges.items) |ed| try writeU(u16, writer, &pos, ed.elev_loss);
+        try padTo(writer, &pos, layout.edges_dist);
+        for (self.edges.items) |ed| try writeU(u32, writer, &pos, ed.distance);
+
+        try padTo(writer, &pos, layout.total);
         try writer.flush();
     }
-
-    pub fn fromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !DynamicGraph {
-        var graph = DynamicGraph.init(allocator);
-
-        // Read header
-        var header: s.FileHeader = undefined;
-        try reader.readSliceAll(std.mem.asBytes(&header));
-        if (!std.mem.eql(u8, &header.magic, &s.FileHeader.MAGIC)) {
-            return error.InvalidFileFormat;
-        }
-
-        if (!s.validVersion(header.version)) {
-            std.debug.print("Unsupported version: {d}.{d}.{d}\n", .{ header.version[0], header.version[1], header.version[2] });
-            return error.UnsupportedVersion;
-        }
-
-        // Read nodes
-        for (0..header.node_count) |i| {
-            var packed_node: s.PackedNode = undefined;
-            try reader.readSliceAll(std.mem.asBytes(&packed_node));
-            const node = s.Node{
-                .id = packed_node.id,
-                .lat = packed_node.lat,
-                .lon = packed_node.lon,
-                .elev = if (packed_node.elev == s.PackedNode.INVALID_ELEV) null else @intCast(packed_node.elev),
-            };
-            try graph.nodes.append(allocator, node);
-            try graph.node_edges.append(allocator, std.ArrayList(u32).empty);
-            try graph.osm_id_to_node_idx.put(node.id, @intCast(i));
-        }
-
-        // Read edges
-        for (0..header.edge_count) |i| {
-            var edge: s.Edge = undefined;
-            try reader.readSliceAll(std.mem.asBytes(&edge));
-            try graph.edges.append(allocator, edge);
-            try graph.node_edges.items[edge.u_idx].append(allocator, @intCast(i));
-        }
-
-        // Edges the other way
-        for (0..header.edge_count) |i| {
-            const edge = graph.edges.items[i];
-            const flipped = s.Edge{
-                .u_idx = edge.v_idx,
-                .v_idx = edge.u_idx,
-                .elev_gain = edge.elev_loss,
-                .elev_loss = edge.elev_gain,
-                .distance = edge.distance,
-            };
-            try graph.edges.append(allocator, flipped);
-            try graph.node_edges.items[flipped.u_idx].append(allocator, @intCast(i + header.edge_count));
-        }
-
-        return graph;
-    }
 };
+
+pub fn padTo(writer: *std.Io.Writer, pos: *u64, target: u64) !void {
+    if (target < pos.*) return error.InvalidFileFormat;
+    const zeroes = [_]u8{0} ** 8;
+    while (pos.* < target) {
+        const len = @min(target - pos.*, zeroes.len);
+        try writer.writeAll(zeroes[0..len]);
+        pos.* += len;
+    }
+}
+
+pub fn writeU(comptime T: type, writer: *std.Io.Writer, pos: *u64, value: T) !void {
+    var bytes: [@sizeOf(T)]u8 = undefined;
+    std.mem.writeInt(T, &bytes, value, .little);
+    try writer.writeAll(&bytes);
+    pos.* += @sizeOf(T);
+}
 
 test "basic graph" {
     var dyn = DynamicGraph.init(std.testing.allocator);
@@ -183,65 +164,21 @@ test "basic graph" {
     try std.testing.expect(edge.distance == 100);
 }
 
-test "iterate" {
+test "outgoing half edges" {
     var dyn = DynamicGraph.init(std.testing.allocator);
     defer dyn.deinit();
 
-    const node_idx0 = try dyn.addNode(1, 10.0, 20.0, 100.0);
-    const node_idx1 = try dyn.addNode(2, 11.0, 21.0, 200.0);
-    const node_idx2 = try dyn.addNode(3, 12.0, 22.0, 300.0);
-    const node_idx3 = try dyn.addNode(4, 13.0, 23.0, 400.0);
-    try dyn.addEdge(node_idx0, node_idx1, 50, 30, 100);
-    try dyn.addEdge(node_idx0, node_idx2, 60, 40, 150);
-    try dyn.addEdge(node_idx1, node_idx3, 70, 50, 200);
+    const a = try dyn.addNode(1, 10.0, 20.0, 100.0);
+    const b = try dyn.addNode(2, 11.0, 21.0, 200.0);
+    const c = try dyn.addNode(3, 12.0, 22.0, 300.0);
+    try dyn.addEdge(a, b, 50, 30, 100);
+    try dyn.addEdge(a, c, 60, 40, 150);
 
-    var iter = dyn.iterateOutgoingEdges(node_idx0);
-    var count: usize = 0;
-    while (iter.next()) |edge| : (count += 1) {
-        try std.testing.expect(edge.u_idx == node_idx0);
-        if (count == 0) {
-            try std.testing.expect(edge.v_idx == node_idx1);
-            try std.testing.expect(edge.elev_gain == 50);
-            try std.testing.expect(edge.elev_loss == 30);
-            try std.testing.expect(edge.distance == 100);
-        } else if (count == 1) {
-            try std.testing.expect(edge.v_idx == node_idx2);
-            try std.testing.expect(edge.elev_gain == 60);
-            try std.testing.expect(edge.elev_loss == 40);
-            try std.testing.expect(edge.distance == 150);
-        } else {
-            try std.testing.expect(false);
-        }
-    }
-    try std.testing.expect(count == 2);
-}
-
-test "add edges later" {
-    var dyn = DynamicGraph.init(std.testing.allocator);
-    defer dyn.deinit();
-
-    const node_idx0 = try dyn.addNode(1, 10.0, 20.0, 100.0);
-    const node_idx1 = try dyn.addNode(2, 11.0, 21.0, 200.0);
-    const node_idx2 = try dyn.addNode(3, 12.0, 22.0, 300.0);
-
-    // Edges can be added in any order, and to any node, after the fact.
-    try dyn.addEdge(node_idx1, node_idx2, 70, 50, 200);
-    try dyn.addEdge(node_idx0, node_idx2, 60, 40, 150);
-    try dyn.addEdge(node_idx0, node_idx1, 50, 30, 100);
-
-    var iter = dyn.iterateOutgoingEdges(node_idx0);
-    var count: usize = 0;
-    while (iter.next()) |edge| : (count += 1) {
-        try std.testing.expect(edge.u_idx == node_idx0);
-        if (count == 0) {
-            try std.testing.expect(edge.v_idx == node_idx2);
-        } else if (count == 1) {
-            try std.testing.expect(edge.v_idx == node_idx1);
-        } else {
-            try std.testing.expect(false);
-        }
-    }
-    try std.testing.expect(count == 2);
+    try std.testing.expectEqual(@as(u32, 2), dyn.outDegree(a));
+    try std.testing.expectEqual(@as(u32, b), dyn.halfEdge(a, 0).to);
+    try std.testing.expectEqual(@as(u32, 50), dyn.halfEdge(a, 0).gain);
+    try std.testing.expectEqual(@as(u32, 150), dyn.halfEdge(a, 1).distance);
+    try std.testing.expectEqual(@as(u32, 0), dyn.outDegree(b));
 }
 
 test "export" {
@@ -252,23 +189,27 @@ test "export" {
     const node_idx2 = try dyn.addNode(2, 11.0, 21.0, 200.0);
     try dyn.addEdge(node_idx1, node_idx2, 50, 30, 100);
 
-    var buffer: [1024]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buffer);
-
+    const bytes = try std.testing.allocator.alloc(u8, s.fileSize(2, 1));
+    defer std.testing.allocator.free(bytes);
+    var writer = std.Io.Writer.fixed(bytes);
     try dyn.exportToWriter(&writer);
 
-    var reader = std.Io.Reader.fixed(&buffer);
-    var loaded_graph = try DynamicGraph.fromReader(std.testing.allocator, &reader);
-    defer loaded_graph.deinit();
+    var loaded = try @import("packed_graph.zig").PackedGraph.init(std.testing.allocator, bytes);
+    defer loaded.deinit();
+    try loaded.index();
 
-    try std.testing.expect(loaded_graph.nodes.items.len == 2);
-    try std.testing.expect(loaded_graph.edges.items.len == 2);
-    const loaded_edge = loaded_graph.edges.items[0];
-    try std.testing.expect(loaded_edge.u_idx == node_idx1);
-    try std.testing.expect(loaded_edge.v_idx == node_idx2);
-
-    var iter = loaded_graph.iterateOutgoingEdges(node_idx1);
-    const loaded_adj_edge = iter.next().?;
-    try std.testing.expect(loaded_adj_edge.v_idx == node_idx2);
-    try std.testing.expect(iter.next() == null);
+    try std.testing.expectEqual(@as(u32, 2), loaded.nodeCount());
+    try std.testing.expectEqual(@as(u32, 1), loaded.edgeCount());
+    try std.testing.expectEqual(@as(f32, 10.0), loaded.nodeLat(0));
+    try std.testing.expectEqual(@as(f32, 21.0), loaded.nodeLon(1));
+    try std.testing.expectEqual(@as(?u16, 100), loaded.nodeElev(0));
+    try std.testing.expectEqual(@as(u32, 1), loaded.outDegree(0));
+    try std.testing.expectEqual(@as(u32, 1), loaded.outDegree(1));
+    const out = loaded.halfEdge(0, 0);
+    try std.testing.expectEqual(@as(u32, 1), out.to);
+    try std.testing.expectEqual(@as(u16, 50), out.gain);
+    const back = loaded.halfEdge(1, 0);
+    try std.testing.expectEqual(@as(u32, 0), back.to);
+    try std.testing.expectEqual(@as(u16, 30), back.gain);
+    try std.testing.expectEqual(@as(u16, 50), back.loss);
 }

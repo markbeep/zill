@@ -46,6 +46,47 @@ pub fn build(b: *std.Build) !void {
 
     if (b.args) |args| run_cmd.addArgs(args);
 
+    // ============= browser module (wasm32) =============
+
+    // Served to the dashboard. Same graph library, no OS underneath, no entry
+    // point: the host drives it through the exports in src/wasm.zig.
+    const wasm_optimize = b.option(std.builtin.OptimizeMode, "wasm-optimize", "Optimization mode for the browser module. Default: ReleaseSafe") orelse .ReleaseSafe;
+    const wasm_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+        .cpu_model = .baseline,
+    });
+
+    const zill_wasm_mod = b.createModule(.{
+        .root_source_file = b.path("src/graph/graph.zig"),
+        .target = wasm_target,
+        .optimize = wasm_optimize,
+    });
+    zill_wasm_mod.addOptions("options", options);
+
+    const wasm_exe = b.addExecutable(.{
+        .name = "zill",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/wasm.zig"),
+            .target = wasm_target,
+            .optimize = wasm_optimize,
+            .imports = &.{
+                .{ .name = "zill", .module = zill_wasm_mod },
+            },
+        }),
+    });
+    wasm_exe.entry = .disabled;
+    // `export fn` alone does not reach the wasm export section for a
+    // freestanding module; rdynamic publishes the entry points to the host.
+    wasm_exe.rdynamic = true;
+    wasm_exe.import_memory = false;
+    wasm_exe.export_memory = true;
+    wasm_exe.initial_memory = 16 * 1024 * 1024;
+
+    const wasm_step = b.step("wasm", "Build the browser WebAssembly module into zig-out/bin/zill.wasm");
+    const install_wasm = b.addInstallArtifact(wasm_exe, .{});
+    wasm_step.dependOn(&install_wasm.step);
+
     // ============= tests =============
 
     const zill_tests = b.addTest(.{ .root_module = zill_mod });

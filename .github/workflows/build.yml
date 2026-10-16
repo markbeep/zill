@@ -1,0 +1,72 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same tarball naming the Dockerfile relies on (arch-os-version).
+      - name: Install Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz" | sudo tar -xJ -C /opt
+          sudo ln -sf /opt/zig-x86_64-linux-0.16.0/zig /usr/local/bin/zig
+          zig version
+
+      - name: Test the finder
+        run: zig build --build-file find/build.zig test
+
+      - name: Build the browser module
+        run: zig build --build-file find/build.zig wasm
+
+      - name: Smoke-test the module
+        run: node find/test/wasm_smoke.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Type-check the dashboard
+        working-directory: dashboard
+        run: |
+          npm ci
+          npx tsc --noEmit
+
+  image:
+    name: Build and push image
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/zill:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
