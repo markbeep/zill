@@ -57,7 +57,8 @@ a climber wants is rarely round.
   target; the dashboard deliberately exposes only the distance one.
 - Progressive search: the client watches routes appear while the algorithm works through start
   nodes, with duplicated climbs suppressed and up to 60 distinct climbs kept. Steepness is carried by
-  line weight and strength within the single course colour, and every route exports as GPX. Choosing
+  the lightness of each stretch within the single course colour, on one constant line weight, and
+  every route exports as GPX. Choosing
   a row frames that climb; the map's own sheet still releases it.
 - The visitor's own position can be shown on the map, and the ground under the course switches
   between the relief shading alone, the swisstopo greyscale sheet and the aerial image, one at a time.

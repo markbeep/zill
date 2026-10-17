@@ -1,6 +1,7 @@
 // MapLibre layer over the swisstopo sheets. Terrain keeps its own colours; the
-// only thing this module adds is the course: one overprint purple for the area,
-// the route lines and the ranked badges.
+// only thing this module adds is the course: one overprint purple for the area
+// and the ranked badges, and a light-to-dark purple for the route lines, whose
+// darkness follows the grade of each stretch.
 //
 // Three grounds, each of them swisstopo's own product over its relief shading:
 // the shading on its own, the greyscale sheet, and the aerial image. The sheet
@@ -12,6 +13,7 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { DataDrivenPropertyValueSpecification } from 'maplibre-gl';
 import type { Feature, FeatureCollection } from 'geojson';
+import { haversineMeters } from './area';
 import type { LngLat, ScreenPoint } from './area';
 import type { Route } from './wasm';
 import { ROUTE_START_MARK } from './icons';
@@ -44,19 +46,21 @@ function cameraBounds(marginKm: number): maplibregl.LngLatBounds {
 
 /** Rank badges are worn by the strongest climbs only; the rest are lines. */
 const BADGE_LIMIT = 10;
-/** Steepness is the world's second carrier of order, after rank. The floor is
- *  deliberately heavy: these lines have to read over a contour-dense sheet. */
-const GRADE_RAMP: [number, number][] = [
-  [0, 2.6],
-  [15, 4],
-  [30, 5.6],
-  [50, 7.4],
+/** Steepness is the world's second carrier of order, after rank. The line keeps
+ *  one weight; lightness carries the local grade, so a route shows where the
+ *  climb actually bites. The paper casing is what keeps the darkest stretches
+ *  legible on relief shading. */
+const ROUTE_WIDTH = 4.2;
+const ROUTE_CASING = 6.8;
+export const GRADE_DEPTH: [number, string][] = [
+  [0, '#cbaee0'],
+  [12, '#b18bd6'],
+  [24, '#8e5cc0'],
+  [36, '#5c2a8a'],
+  [48, '#14161a'],
 ];
-
-function widthForGrade(scale: number): DataDrivenPropertyValueSpecification<number> {
-  const stops = GRADE_RAMP.flatMap(([grade, width]) => [grade, Number((width * scale).toFixed(2))]);
-  return ['interpolate', ['linear'], ['get', 'grade'], ...stops] as DataDrivenPropertyValueSpecification<number>;
-}
+/** Colours by the grade of each drawn stretch, not by the route's average. */
+const GRADE_COLOR = ['interpolate', ['linear'], ['get', 'grade'], ...GRADE_DEPTH.flat()] as DataDrivenPropertyValueSpecification<string>;
 
 export type Basemap = 'shade' | 'topo' | 'satellite';
 
@@ -203,8 +207,8 @@ export class CourseMap {
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
               'line-color': PAPER,
-              'line-width': widthForGrade(1.75),
-              'line-opacity': 0.72,
+              'line-width': ROUTE_CASING,
+              'line-opacity': 0.78,
             },
           },
           {
@@ -213,11 +217,9 @@ export class CourseMap {
             source: 'routes',
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
-              'line-color': OVERPRINT,
-              'line-width': widthForGrade(1),
-              // Steeper climbs are drawn stronger, but never faint: the course is
-              // the point of the surface.
-              'line-opacity': ['interpolate', ['linear'], ['get', 'grade'], 0, 0.72, 15, 0.85, 30, 0.94, 50, 1],
+              'line-color': GRADE_COLOR,
+              'line-width': ROUTE_WIDTH,
+              'line-opacity': 1,
             },
           },
           {
@@ -429,18 +431,42 @@ export class CourseMap {
     this.pending.routes = routes;
     this.pending.selectedRank = selectedRank;
     if (!this.styled) return;
-    const features: Feature[] = routes.map((route) => {
-      const coordinates: [number, number][] = [];
+    const features: Feature[] = [];
+    for (const route of routes) {
+      const points: { lat: number; lng: number; ele: number }[] = [];
       for (let i = 0; i < route.points.length; i += 3) {
-        coordinates.push([route.points[i + 1], route.points[i]]);
+        points.push({ lat: route.points[i], lng: route.points[i + 1], ele: route.points[i + 2] });
       }
-      const grade = route.distance > 0 ? (route.elevation / route.distance) * 100 : 0;
-      return {
-        type: 'Feature',
-        properties: { rank: route.rank, grade, selected: route.rank === selectedRank },
-        geometry: { type: 'LineString', coordinates },
-      };
-    });
+      if (points.length < 2) continue;
+
+      const runs: number[] = [];
+      const rises: number[] = [];
+      for (let i = 0; i < points.length - 1; i++) {
+        runs.push(Math.max(haversineMeters(points[i], points[i + 1]), 1));
+        rises.push(points[i + 1].ele - points[i].ele);
+      }
+      const raw = rises.map((rise, i) => (rise / runs[i]) * 100);
+
+      for (let i = 0; i < points.length - 1; i++) {
+        // Smooth over three segments so a single DEM step does not read as a cliff.
+        let weighted = 0;
+        let weight = 0;
+        for (let j = Math.max(0, i - 1); j <= Math.min(raw.length - 1, i + 1); j++) {
+          weighted += raw[j] * runs[j];
+          weight += runs[j];
+        }
+        const grade = Math.max(0, Math.min(60, weighted / weight));
+        const coordinates: [number, number][] = [
+          [points[i].lng, points[i].lat],
+          [points[i + 1].lng, points[i + 1].lat],
+        ];
+        features.push({
+          type: 'Feature',
+          properties: { rank: route.rank, grade: Number(grade.toFixed(2)), selected: route.rank === selectedRank },
+          geometry: { type: 'LineString', coordinates },
+        });
+      }
+    }
     (this.map.getSource('routes') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
 
     for (const badge of this.badges) badge.marker.remove();

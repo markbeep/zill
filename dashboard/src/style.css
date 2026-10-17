@@ -890,8 +890,8 @@ body {
 }
 
 .legend__line {
-  width: 18px;
-  height: 2px;
+  width: 20px;
+  height: 3px;
   background: var(--overprint);
 }
 

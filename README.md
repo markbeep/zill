@@ -103,23 +103,6 @@ just wasm    # find/zig-out/bin/zill.wasm
 just graph   # data/switzerland_walkable_100m.zl.tar.gz (~66 MB, 3.9M nodes)
 ```
 
-A fresh checkout has neither link, and the image never relies on them: it compiles the module itself
-and copies it into the public tree, then refuses to build if `dist/zill.wasm` is missing.
-
-The page downloads that archive, unpacks it with a streaming gunzip, hands the bytes to the module,
-and lets it build its adjacency and spatial indexes. Every stage reports itself in the panel with
-real byte counts, and the search control stays disabled until the graph is searchable; the graph is
-~138 MB in memory plus a ~50 MB index, so the browser needs room for roughly 200 MB. `wasm.zig`
-exposes a small flat API (reserve bytes, load, index in steps, count/collect nodes in a polygon,
-start/step a search, read routes) and one host scratch buffer, so a drag never allocates.
-
-The search runs in the worker in short turns: climbs appear on the map and in the ranked list while
-the algorithm is still walking the start nodes, and near-duplicates are reported as suppressed. One
-search mode: the strongest climb that starts inside the drawn area within the entered distance
-(metres, default 1000), and up to 60 distinct climbs are kept, so a whole area fills with route
-lines. Line width and strength follow each climb's average gradient — the steep ground reads first
-without a second colour — and every route downloads as GPX 1.1 from its row.
-
 ## Convert - Generate .zl file from OSM data
 
 If you want to generate your own `.zl` file, you can use the `convert/` subproject (`zillconv`). It depends on [PROJ](https://proj.org/) to convert the coordinates from WGS84 to Swiss coordinate system (EPSG:21781) and [expat](https://libexpat.github.io/) to parse the OSM XML data. End goal would be to fully remove these system dependencies and build everything with the Zig build system.

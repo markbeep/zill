@@ -1,6 +1,11 @@
 import { createSignal, For, Show } from 'solid-js';
+import { GRADE_DEPTH } from '../map';
 import type { LoadState, Route, SearchStats } from '../wasm';
 import type { LngLat } from '../area';
+
+const DEPTH_GRADIENT = `linear-gradient(90deg, ${GRADE_DEPTH.map(
+  ([grade, color]) => `${color} ${(grade / GRADE_DEPTH[GRADE_DEPTH.length - 1][0]) * 100}%`,
+).join(', ')})`;
 
 type PanelProps = {
   area: LngLat[] | null;
@@ -446,9 +451,9 @@ export function Panel(props: PanelProps) {
           <ul class="legend">
           <li>
             <span class="legend__mark">
-              <span class="legend__line" />
+              <span class="legend__line" style={{ background: DEPTH_GRADIENT }} />
             </span>
-            <span>route found by the search. one overprint, drawn thicker and stronger the steeper it climbs</span>
+            <span>route found by the search. one weight, one hue: the line darkens as the ground steepens, stretch by stretch</span>
           </li>
           <li>
             <span class="legend__mark">

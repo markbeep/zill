@@ -3,6 +3,10 @@ name: Zill
 description: Client-side hill finder for Switzerland — a course overprint on an official map sheet.
 colors:
   overprint: "#8e5cc0"
+  grade-flat: "#cbaee0"
+  grade-low: "#b18bd6"
+  grade-deep: "#5c2a8a"
+  grade-ink: "#14161a"
   overprint-tint: "rgba(142, 92, 192, 0.12)"
   overprint-veil: "rgba(142, 92, 192, 0.32)"
   paper: "#fbfaf7"
@@ -98,13 +102,15 @@ map is never decorated and the panel is never coloured, because that split is wh
 instantly legible over terrain.
 
 The system is deliberately calm — it is an instrument, not a game. There is no second accent, no
-shadow, no card, no gradient, and no motion that is not carrying information: the search control's
-fill *is* the progress, and the camera moves once to frame the course it just found. Numbers are the
+shadow, no card, no decorative gradient, and no motion that is not carrying information: the route
+line's light-to-dark purple is the one ramp, and it is data. The search control's fill *is* the
+progress, and the camera moves once to frame the course it just found. Numbers are the
 loudest thing on the screen and are always right-aligned in tabular columns, so climbs can be
 compared straight down the panel edge.
 
 **Key Characteristics:**
-- One overprint purple on a greyscale ground; terrain keeps its own colours.
+- One purple family on a greyscale ground; terrain keeps its own colours. The overprint marks the
+  course, and the route line's lightness carries its local grade.
 - Flat by construction: separation is a one-device-pixel rule, never a shadow or a card.
 - Every figure in a right-aligned tabular column; Swiss thousands separators.
 - Zero radius on every control; circles exist only as course notation (vertices, edge handles, rank badges).
@@ -117,8 +123,10 @@ for a new feature.
 
 ### Primary
 - **Overprint Purple** (#8e5cc0): the course and nothing else — the drawn area's outline and tint,
-  route lines, rank badges, the gradient bar, the live start-node count, and the search control's
-  ready state. Its rarity is what makes a 2.4 px route line readable over a busy raster.
+  rank badges, the gradient bar, the live start-node count, and the search control's ready state.
+  Its rarity is what makes a 4.2 px route line readable over a busy raster.
+- **Grade Depth** (#cbaee0 → #b18bd6 → #8e5cc0 → #5c2a8a → #14161a): the route line only. A single
+  hue family darkened by the local gradient of each stretch, never by the route's average.
 
 ### Neutral
 - **Sheet Paper** (#fbfaf7): the legend panel's ground and the fill of rank badges and vertex marks.
@@ -130,8 +138,9 @@ for a new feature.
 - **Alert** (#a3362c): failure text only (a graph that could not be prepared). Never decorative.
 
 ### Named Rules
-**The One Overprint Rule.** Exactly one colour carries data. If it is not the course, a live figure,
-or a progress fill, it is ink. Terrain tints belong to the map's own layers, never to the panel.
+**The One Hue Rule.** Exactly one hue family carries data. If it is not the course, a live figure, or
+a progress fill, it is ink. The route's grade depth is the only lightness scale, and it is still
+course data. Terrain tints belong to the map's own layers, never to the panel.
 
 **The Ground Rule.** Every basemap is swisstopo's own product over its relief shading, credited
 © swisstopo: the shading on its own, the greyscale sheet, and the aerial image. Only what is on
@@ -218,9 +227,10 @@ notation, and only there: area vertices (a paper disc with a 2.25 px overprint r
 selected), hollow mid-edge handles (4 px, 1.5 px ring), the 20 px rank badge worn at a climb's summit,
 and the 18 px play mark where the chosen climb sets off. No border below 1 px and no dashes anywhere.
 
-The two lines that carry the course — the drawn area's edge (solid 2 px) and each route (2.6 px) —
-sit on a paper casing (5 px and 5.4 px at 0.66–0.7 opacity). That is map-making's own device for
-keeping a line readable over contour-dense terrain, and it costs no second colour.
+The two lines that carry the course — the drawn area's edge (solid 2 px) and each route (one 4.2 px
+weight) — sit on a paper casing (5 px at 0.7 opacity and 6.8 px at 0.78). That is map-making's own
+device for keeping a line readable over contour-dense terrain, and it costs no second colour. The
+route casing is wider because the darkest grade stretches must hold on relief shading.
 
 ## Components
 
@@ -331,11 +341,12 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
 - **Collision:** badges keep 20 px of clearance, nudged along their own route's tail (sideways or
   back along the final segment) with a roomiest-slot fallback, and re-laid on every camera move; the
   legend says "set beside the summit", not "at" it. Only the ten strongest climbs wear one.
-- **Steepness ramp:** the one overprint carries a second signal without a second colour — line width
-  and opacity follow the route's average gradient (2.6 px / 0.72 at flat, 7.4 px / 1.0 at 50 % and
-  above), on a paper casing at 1.75× width. A search keeps up to 60 climbs, so a whole area fills
-  with route lines and the steep ground reads first. The floor is heavy on purpose: the course is
-  the point of the surface, so no route is drawn faint.
+- **Steepness depth:** the route keeps one 4.2 px weight. Its lightness follows the local gradient,
+  stretch by stretch: pale lilac at flat, overprint at 24 %, deep violet at 36 %, ink at 48 % and
+  above. A route is split at its own vertices for painting, so the steep start of a climb darkens
+  while its flat run stays pale; the average grade no longer decides the whole line. The 6.8 px
+  paper casing at 0.78 opacity keeps the darkest stretches legible on relief shading. A search
+  keeps up to 60 climbs, so a whole area fills with route lines and the steep ground reads first.
 - **Course ground:** inside the drawn area the sheet is washed towards paper (46 % paper veil plus a
   6 % overprint tint), so the terrain still reads and the routes sit on a quieter ground.
 - **Start-node field:** every start node is drawn, however large the area — thinned twice (worker:
@@ -350,7 +361,7 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
 ## Do's and Don'ts
 
 ### Do:
-- **Do** keep the overprint for course data, live figures and progress fills only.
+- **Do** keep the overprint and its grade depth for course data, live figures and progress fills only.
 - **Do** set every comparable figure right-aligned with tabular numerals and Swiss separators.
 - **Do** separate with 1 px `{colors.rule}` rules; keep the panel at 360 px on desktop.
 - **Do** state cost and state before work: start-node count before a search, load stage and bytes
@@ -371,11 +382,12 @@ exactly while the graph is unavailable, and a 2 px rule under it repeats the sam
   attribution lists what that one loads.
 - **Do** let a phone set the sheet's height by pulling its head, and remember that height next visit.
 - **Do** return every camera flight, fill transition and the panel's collapse to 0 ms under `prefers-reduced-motion`.
-- **Do** keep the node field and the route ramp data-driven: the field thins with the camera, the
-  ramp follows gradient. Neither may become decoration.
+- **Do** keep the node field and the route depth data-driven: the field thins with the camera, the
+  depth follows the local gradient. Neither may become decoration.
 
 ### Don't:
-- **Don't** add a second accent colour, a gradient, a glow or a coloured map tint.
+- **Don't** add a second accent colour, a decorative gradient, a glow or a coloured map tint. The
+  route's light-to-dark purple is data, not decoration.
 - **Don't** use cards, shadows, blur, or any radius other than 0 (circles are course notation only).
 - **Don't** colour the panel's ground or set measurements inside sentences.
 - **Don't** use the overprint decoratively — a purple element that carries no data is a bug.
