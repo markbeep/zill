@@ -152,62 +152,90 @@ pub fn Engine(comptime G: type) type {
         /// Re-ranks the candidate pool and publishes any route that is both
         /// stronger than the weakest accepted one and not a duplicate of the
         /// routes kept above it.
+        ///
+        /// Dedup is strength-aware: a candidate that overlaps an accepted route
+        /// replaces it when it climbs more, and is suppressed only by a route at
+        /// least as strong. Without that, the chunk a start happened to be
+        /// scanned in would decide the ranking - a weak route accepted early
+        /// would keep a stronger one on the same climb out of the list.
         fn publish(self: *Self) !void {
-            self.scratch.clearRetainingCapacity();
-            try self.scratch.appendSlice(self.allocator, self.heap.items[0..self.heap.count()]);
-            std.mem.sort(Candidate, self.scratch.items, {}, descending);
-            // Sorted descending, so the head of the pool is the best this area
-            // can do. If even that is below the floor, the floor is off.
-            const floor: i64 = if (self.scratch.items.len > 0 and self.scratch.items[0].elevation < MIN_CLIMB_GAIN_M)
-                FALLBACK_GAIN_M
-            else
-                MIN_CLIMB_GAIN_M;
-
-            for (self.scratch.items) |cand| {
-                const weakest: i64 = if (self.accepted.items.len >= self.max_results)
-                    self.accepted.items[self.accepted.items.len - 1].elevation
+            var retry_floor: i64 = std.math.minInt(i64);
+            while (true) {
+                self.scratch.clearRetainingCapacity();
+                try self.scratch.appendSlice(self.allocator, self.heap.items[0..self.heap.count()]);
+                std.mem.sort(Candidate, self.scratch.items, {}, descending);
+                // Sorted descending, so the head of the pool is the best this
+                // area can do. If even that is below the floor, the floor is off.
+                const floor: i64 = if (self.scratch.items.len > 0 and self.scratch.items[0].elevation < MIN_CLIMB_GAIN_M)
+                    FALLBACK_GAIN_M
                 else
-                    std.math.minInt(i64);
-                if (cand.elevation <= weakest) break;
-                if (cand.evaluated) |evaluated| {
-                    if (evaluated >= cand.elevation) continue;
-                }
+                    MIN_CLIMB_GAIN_M;
 
-                const details = try solve.Dijkstra(.Path).run(self.allocator, self.graph, cand.idx, self.end_condition);
-                self.considered += 1;
-                self.markEvaluated(cand.idx, cand.elevation);
+                var removed: ?i64 = null;
+                for (self.scratch.items) |cand| {
+                    const weakest: i64 = if (self.accepted.items.len >= self.max_results)
+                        self.accepted.items[self.accepted.items.len - 1].elevation
+                    else
+                        std.math.minInt(i64);
+                    if (cand.elevation <= weakest) break;
+                    if (cand.evaluated) |evaluated| {
+                        if (evaluated >= cand.elevation) continue;
+                    }
 
-                // A start node whose best "route" is itself, or less gain than
-                // this area can offer: not a route, and not something to rank.
-                if (details.indices.len < 2 or details.elevation < floor) {
-                    self.allocator.free(details.indices);
-                    continue;
-                }
+                    const details = try solve.Dijkstra(.Path).run(self.allocator, self.graph, cand.idx, self.end_condition);
+                    self.considered += 1;
+                    self.markEvaluated(cand.idx, cand.elevation);
 
-                var duplicate = false;
-                const full = self.accepted.items.len >= self.max_results;
-                for (self.accepted.items, 0..) |route, i| {
-                    // The weakest accepted route is replaceable by this one.
-                    if (full and i == self.accepted.items.len - 1) continue;
-                    if (dedup.overlapRatio(route.points, details.indices, self.graph, &self.dedup_scratch) > self.threshold) {
+                    // A start node whose best "route" is itself, or less gain
+                    // than this area can offer: not a route, and not something
+                    // to rank.
+                    if (details.indices.len < 2 or details.elevation < floor) {
+                        self.allocator.free(details.indices);
+                        continue;
+                    }
+
+                    var duplicate = false;
+                    var i: usize = 0;
+                    while (i < self.accepted.items.len) {
+                        const route = self.accepted.items[i];
+                        if (dedup.overlapRatio(route.points, details.indices, self.graph, &self.dedup_scratch) <= self.threshold) {
+                            i += 1;
+                            continue;
+                        }
+                        if (details.elevation > route.elevation) {
+                            const dropped = self.accepted.orderedRemove(i);
+                            self.allocator.free(dropped.points);
+                            removed = @max(removed orelse std.math.minInt(i64), dropped.elevation);
+                            continue;
+                        }
                         duplicate = true;
                         break;
                     }
+
+                    if (duplicate) {
+                        self.suppressed += 1;
+                        self.allocator.free(details.indices);
+                        continue;
+                    }
+
+                    try self.insert(Route{
+                        .start_idx = cand.idx,
+                        .elevation = details.elevation,
+                        .distance = details.distance,
+                        .points = details.indices,
+                    });
+                    self.revision += 1;
                 }
 
-                if (duplicate) {
-                    self.suppressed += 1;
-                    self.allocator.free(details.indices);
-                    continue;
+                // A candidate suppressed earlier in the run may only have been
+                // blocked by the route just evicted; let it compete again.
+                const limit = removed orelse break;
+                retry_floor = @max(retry_floor, limit);
+                for (self.heap.items[0..self.heap.count()]) |*item| {
+                    if (item.evaluated) |evaluated| {
+                        if (evaluated <= retry_floor) item.evaluated = null;
+                    }
                 }
-
-                try self.insert(Route{
-                    .start_idx = cand.idx,
-                    .elevation = details.elevation,
-                    .distance = details.distance,
-                    .points = details.indices,
-                });
-                self.revision += 1;
             }
         }
 
@@ -276,6 +304,22 @@ fn flatGraph(allocator: std.mem.Allocator) !@import("dynamic.zig").DynamicGraph 
     return g;
 }
 
+/// One straight climb of five nodes, each 200 m higher and 100 m apart. A
+/// start lower on the chain shares its whole path with a start above it.
+fn chainGraph(allocator: std.mem.Allocator) !@import("dynamic.zig").DynamicGraph {
+    var g = @import("dynamic.zig").DynamicGraph.init(allocator);
+    errdefer g.deinit();
+    var previous: ?u32 = null;
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        const step: f32 = @floatFromInt(i);
+        const idx = try g.addNode(@intCast(i + 1), 46.0 + step * 0.001, 7.0, 400 + step * 200);
+        if (previous) |p| try g.addEdge(p, idx, 200, 0, 100);
+        previous = idx;
+    }
+    return g;
+}
+
 /// The engine runs on the same zero-copy representation the browser loads.
 /// The returned bytes stay owned by the caller and must outlive the graph.
 fn LoadedGraph(comptime G: type) type {
@@ -338,6 +382,37 @@ test "engine suppresses the twin of a climb and keeps distinct climbs" {
     try testing.expect(routes[1].start_idx >= 4);
     try testing.expectEqual(@as(usize, 3), routes[0].points.len);
     try testing.expectEqual(@as(i64, 1950), routes[0].distance);
+}
+
+test "a stronger start found in a later chunk replaces the weaker route it overlaps" {
+    const Packed = @import("packed_graph.zig").PackedGraph;
+    var g = try chainGraph(testing.allocator);
+    defer g.deinit();
+    var loaded = try LoadedGraph(Packed).init(&g, testing.allocator);
+    defer loaded.deinit(testing.allocator);
+
+    // Node 1 (600 m gain) is scanned first and keeps the climb; node 0 starts
+    // 200 m lower, gains 800 m and walks the same track. Arrival order must not
+    // decide the ranking: the stronger route replaces the weaker one.
+    const starts = [_]u32{ 1, 0 };
+    var engine = try Engine(Packed).init(
+        testing.allocator,
+        loaded.graph,
+        &starts,
+        .{ .max_distance = 1000 },
+        5,
+        0.5,
+    );
+    defer engine.deinit();
+
+    try testing.expect(try engine.step(1));
+    try testing.expectEqual(@as(i64, 600), engine.routes()[0].elevation);
+    try testing.expect(!try engine.step(1));
+
+    const routes = engine.routes();
+    try testing.expectEqual(@as(usize, 1), routes.len);
+    try testing.expectEqual(@as(u32, 0), routes[0].start_idx);
+    try testing.expectEqual(@as(i64, 800), routes[0].elevation);
 }
 
 test "a flat area still gets routes, ranked by what little they rise" {

@@ -120,6 +120,10 @@ export default function App() {
   let tap: { pointerId: number; x: number; y: number; moved: boolean } | null = null;
   /** The same rule on a vertex handle: a press that never moves asks to delete. */
   let vertexPress: { index: number; x: number; y: number; moved: boolean } | null = null;
+  /** Pointers down on the map. A second one turns the gesture into a pinch. */
+  const activePointers = new Set<number>();
+  /** The pointer that owns the current vertex drag; no other may move it. */
+  let dragPointer: number | null = null;
 
   let areaFrame = 0;
   function requestArea(): void {
@@ -289,6 +293,14 @@ export default function App() {
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      activePointers.add(event.pointerId);
+      // A second finger is a pinch, never an edit: drop any tap or vertex drag
+      // the first finger started, so zooming does not reshape the area.
+      if (activePointers.size > 1) {
+        tap = null;
+        abortDrag();
+        return;
+      }
       if (event.button !== 0 || !courseMap) return;
       // Map chrome and our own controls own their clicks: the attribution
       // toggle, the zoom buttons and the toolbar must never place an area.
@@ -323,6 +335,17 @@ export default function App() {
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      // Fingers moving during a pinch must not drag a vertex or count as a tap.
+      if (activePointers.size > 1) {
+        abortDrag();
+        return;
+      }
+      // Only the pointer that started the drag may move the vertex. A move
+      // from another one means a second finger is down: a pinch, not an edit.
+      if (dragging() !== null && event.pointerId !== dragPointer) {
+        abortDrag();
+        return;
+      }
       if (tap && event.pointerId === tap.pointerId) {
         const point = pointerOf(event);
         if (Math.hypot(point.x - tap.x, point.y - tap.y) > TAP_SLOP_PX) tap.moved = true;
@@ -354,6 +377,7 @@ export default function App() {
 
     const endDrag = () => {
       if (dragging() === null) return;
+      dragPointer = null;
       setDragging(null);
       courseMap?.setPanEnabled(true);
       requestArea();
@@ -361,6 +385,7 @@ export default function App() {
     };
 
     const onPointerUp = (event: PointerEvent) => {
+      activePointers.delete(event.pointerId);
       const pending = tap;
       if (pending && event.pointerId === pending.pointerId) {
         tap = null;
@@ -380,6 +405,12 @@ export default function App() {
       }
       const pressed = vertexPress;
       vertexPress = null;
+      // Releasing a second finger ends the pinch, not the edit: put the figure
+      // back instead of committing whatever the first finger had done.
+      if (dragging() !== null && event.pointerId !== dragPointer) {
+        abortDrag();
+        return;
+      }
       endDrag();
       // The press never moved, so nothing was dragged: it was a click on the
       // handle, which asks before it removes.
@@ -387,8 +418,9 @@ export default function App() {
     };
 
     const onPointerCancel = () => {
+      activePointers.clear();
       tap = null;
-      endDrag();
+      abortDrag();
     };
 
     // The map's own listeners call stopPropagation on the canvas, so the drag
@@ -437,10 +469,27 @@ export default function App() {
   function startDrag(index: number, event: PointerEvent, snapshot = true): void {
     event.preventDefault();
     if (snapshot) remember();
+    dragPointer = event.pointerId;
     setSelectedVertex(index);
     setDragging(index);
     courseMap?.setPanEnabled(false);
     vertexPress = { index, x: event.clientX, y: event.clientY, moved: false };
+  }
+
+  /** A pinch cut a vertex drag short: put the figure back, drop its snapshot. */
+  function abortDrag(): void {
+    if (dragging() === null) return;
+    dragPointer = null;
+    setDragging(null);
+    vertexPress = null;
+    courseMap?.setPanEnabled(true);
+    const previous = undoStack.pop();
+    setUndoDepth(undoStack.length);
+    if (previous === undefined) return;
+    setArea(previous);
+    setSelectedVertex(null);
+    requestArea();
+    requestNodes();
   }
 
   let lastInteractiveNodes = 0;
@@ -764,6 +813,7 @@ export default function App() {
                 }}
                 aria-label={`point ${index + 1} of ${area()?.length}. drag to move, arrow keys to nudge, shift-click or delete to remove. dragging anywhere on an edge adds a point.`}
                 on:pointerdown={(event) => {
+                  if (activePointers.size > 1) return;
                   if (event.shiftKey) {
                     event.preventDefault();
                     event.stopPropagation();

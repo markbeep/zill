@@ -78,7 +78,9 @@ with the same route from a dozen neighbouring junctions. `zill` drops a candidat
 an already kept route by more than `--dedup`: the overlap is the share of the shorter route's
 distance that both routes walk, measured on hops that connect the same two places within ~33 m
 (node positions are snapped to a grid and neighbouring cells count, so two starts 10 m apart count
-as one place even when they are different graph nodes). Candidates that gain less than 50 m are not
+as one place even when they are different graph nodes). A weaker candidate is dropped when it
+overlaps a kept route, but a stronger one replaces the route it overlaps, so the ranking does not
+depend on the order the start nodes happen to be visited in. Candidates that gain less than 50 m are not
 climbs and never enter the ranking, unless nothing in the area reaches that floor: a small or flat
 area then ranks the strongest lines its distance allows, with honest small gains instead of an empty
 list. The count of suppressed candidates is printed.
