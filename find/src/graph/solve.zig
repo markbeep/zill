@@ -211,7 +211,7 @@ pub fn Dijkstra(comptime dtype: DijkstraReturn) type {
                 for (0..degree) |k| {
                     const edge = graph.halfEdge(current_idx, @intCast(k));
                     const new_distance = u.distance + edge.distance;
-                    const new_elevation = if (options.ignore_elevation_loss) u.elevation + edge.gain else u.elevation + edge.gain - edge.loss;
+                    const new_elevation = u.elevation + edge.gain - edge.loss;
 
                     if (end_condition == .max_distance and new_distance > end_condition.max_distance) {
                         continue;

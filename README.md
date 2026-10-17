@@ -20,8 +20,6 @@ Each Zig subproject is a standalone project with its own `build.zig` and `build.
 - **Nodes (18 bytes each, four sections):** `i64` OSM node id, `f32` latitude, `f32` longitude, `u16` elevation (`0xFFFF` = unknown).
 - **Edges (16 bytes each, five sections):** `u32` endpoints — _indices_ of nodes `u` and `v`, not OSM ids — plus total elevation gain, loss, and distance from `u` to `v`. Each segment is stored once; the reverse direction is derived on read. Elevation and distance are accumulated to include intermediate nodes along the original OSM ways, which keeps route elevation accurate but makes a GPX of a route cut corners between stored nodes.
 
-A loader validates the magic, the version range, and that the file's length matches its header; a file that disagrees is refused instead of being read as valid-but-wrong coordinates. `zill` and the browser module read the file in place — no per-node copy and no second set of reverse edges — and build a compact half-edge index over it.
-
 > [!NOTE]
 > [Releases page](https://github.com/markbeep/zill/releases) includes pre-generated `.zl` files.
 
