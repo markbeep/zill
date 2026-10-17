@@ -8,6 +8,8 @@ import { downloadGpx } from './gpx';
 import { DEDUP_PERMILLE, MAX_RESULT_ROUTES, PINPRICK_CELL_PX, ZillWorker } from './wasm';
 import type { LoadState, Route, SearchStats } from './wasm';
 import {
+  areaFromHash,
+  areaHash,
   areaM2,
   degreesPerMeter,
   haversineMeters,
@@ -46,7 +48,7 @@ export default function App() {
   let courseMap: CourseMap | undefined;
   let worker: ZillWorker | undefined;
 
-  const [area, setArea] = createSignal<LngLat[] | null>(null);
+  const [area, setArea] = createSignal<LngLat[] | null>(areaFromHash(location.hash));
   const [selectedVertex, setSelectedVertex] = createSignal<number | null>(null);
   const [dragging, setDragging] = createSignal<number | null>(null);
   const [hoveredVertex, setHoveredVertex] = createSignal<number | null>(null);
@@ -63,6 +65,9 @@ export default function App() {
   const [locating, setLocating] = createSignal<'idle' | 'busy' | 'shown'>('idle');
   const [panelOpen, setPanelOpen] = createSignal(true);
   const [searching, setSearching] = createSignal(false);
+  /** Wall-clock duration of the last finished run, for the panel. */
+  const [finishedMs, setFinishedMs] = createSignal(0);
+  let searchStartedAt = 0;
   const [hoveredRoute, setHoveredRoute] = createSignal<number | null>(null);
   const [pinnedRoute, setPinnedRoute] = createSignal<number | null>(null);
   /** The point a tap asked about, held until the visitor answers. */
@@ -263,7 +268,10 @@ export default function App() {
     worker = new ZillWorker();
     worker.onLoad = (state) => {
       setLoad(state);
-      if (state.phase === 'ready') requestArea();
+      if (state.phase === 'ready') {
+        requestArea();
+        requestNodes();
+      }
     };
     worker.onArea = (count) => {
       setNodeCount(count);
@@ -274,7 +282,10 @@ export default function App() {
       if (discardReports) return;
       setStats(next);
       if (changed) setRoutes(nextRoutes);
-      if (next.finished) setSearching(false);
+      if (next.finished) {
+        setSearching(false);
+        setFinishedMs(performance.now() - searchStartedAt);
+      }
       if (changed && nextRoutes.length > 0 && !framedRun && cameraOwned) {
         framedRun = true;
         courseMap?.fitToAreaAndRoutes(area(), nextRoutes);
@@ -283,6 +294,8 @@ export default function App() {
     void courseMap.ready().then(() => {
       setMapVersion((version) => version + 1);
       setViewKey((key) => key + 1);
+      const restored = area();
+      if (restored) requestAnimationFrame(() => courseMap?.fitToArea(restored));
       worker?.post({ type: 'load' });
     });
 
@@ -589,6 +602,7 @@ export default function App() {
     const current = area();
     if (!current || !ready()) return;
     setSearching(true);
+    searchStartedAt = performance.now();
     setPinnedRoute(null);
     setHoveredRoute(null);
     discardReports = false;
@@ -643,6 +657,14 @@ export default function App() {
     requestArea();
     requestNodes();
   }
+
+  // The drawn area lives in the fragment, so a copied URL carries the figure.
+  createEffect(() => {
+    const current = area();
+    const hash = current ? areaHash(current) : '';
+    if (location.hash === hash) return;
+    history.replaceState(history.state, '', hash || location.pathname + location.search);
+  });
 
   // The drawn area drives both the map layers and the start-node query.
   createEffect(() => {
@@ -704,6 +726,7 @@ export default function App() {
         nodeCount={nodeCount()}
         load={load()}
         stats={stats()}
+        finishedMs={finishedMs()}
         routes={routes()}
         distanceM={distanceM()}
         notice={notice()}

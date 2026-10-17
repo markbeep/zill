@@ -1,6 +1,7 @@
 // Search-area geometry. Vertices are kept in geographic coordinates; hit tests
 // run on projected screen points, because a pointer cares about pixels, not
 // degrees.
+import { decode, encode } from '@googlemaps/polyline-codec';
 
 export type LngLat = { lng: number; lat: number };
 export type ScreenPoint = { x: number; y: number };
@@ -38,6 +39,36 @@ export function insertVertex(area: LngLat[], edge: number, at: LngLat): LngLat[]
   const next = [...area];
   next.splice(edge + 1, 0, at);
   return next;
+}
+
+const SHARE_PREFIX = '#area=';
+/** ~1 m, finer than the graph the search walks. */
+const SHARE_PRECISION = 5;
+
+/** The fragment that carries an area, Google-polyline encoded. */
+export function areaHash(area: LngLat[]): string {
+  return SHARE_PREFIX + encode(area, SHARE_PRECISION);
+}
+
+/** The area a fragment describes, or null when it carries no usable one. */
+export function areaFromHash(hash: string): LngLat[] | null {
+  // Messengers sometimes encode the fragment's characters; a browser's copy does not.
+  let raw = hash;
+  try {
+    raw = decodeURIComponent(hash);
+  } catch {
+    // A stray '%' is not ours to repair: nothing below will parse it.
+  }
+  if (!raw.startsWith(SHARE_PREFIX)) return null;
+  const points = decode(raw.slice(SHARE_PREFIX.length), SHARE_PRECISION);
+  if (points.length < MIN_VERTICES) return null;
+  const area: LngLat[] = [];
+  for (const [lat, lng] of points) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    area.push({ lat, lng });
+  }
+  return area;
 }
 
 export function removeVertex(area: LngLat[], index: number): LngLat[] {

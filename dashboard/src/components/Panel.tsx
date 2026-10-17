@@ -8,6 +8,8 @@ type PanelProps = {
   nodeCount: number;
   load: LoadState;
   stats: SearchStats | null;
+  /** Wall-clock time the last finished search took, in milliseconds. */
+  finishedMs: number;
   routes: Route[];
   distanceM: number;
   searching: boolean;
@@ -225,7 +227,12 @@ export function Panel(props: PanelProps) {
       return `${swiss(props.stats.scanned, 0)} / ${swiss(props.stats.total, 0)} starts`;
     }
     if (props.load.phase === 'ready' && props.stats && !props.searching) {
-      return props.stats.finished ? 'search finished' : '';
+      if (!props.stats.finished) return '';
+      const ms = props.finishedMs;
+      if (!Number.isFinite(ms)) return 'search finished';
+      // Below 5 ms the seconds reading rounds to 0.00: the milliseconds say more.
+      const time = ms < 5 ? `${swiss(ms, 0)} ms` : `${swiss(ms / 1000, 2)}s`;
+      return `search finished in ${time}`;
     }
     return '';
   };
