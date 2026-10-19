@@ -4,7 +4,8 @@ import type { LoadState, Route, SearchStats } from '../wasm';
 import type { LngLat } from '../area';
 
 const DEPTH_GRADIENT = `linear-gradient(90deg, ${GRADE_DEPTH.map(
-  ([grade, color]) => `${color} ${(grade / GRADE_DEPTH[GRADE_DEPTH.length - 1][0]) * 100}%`,
+  ([grade, color]) =>
+    `${color} ${(grade / GRADE_DEPTH[GRADE_DEPTH.length - 1][0]) * 100}%`,
 ).join(', ')})`;
 
 type PanelProps = {
@@ -39,7 +40,9 @@ type PanelProps = {
 /** Touch fires mouseenter and pointerenter around a tap, which reads as a
  *  preview nobody asked for and a selection that drops itself. Hover, and the
  *  hints that hang off it, are a pointer's game. */
-export const HOVER_CAPABLE = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches;
+export const HOVER_CAPABLE =
+  typeof matchMedia === 'function' &&
+  matchMedia('(hover: hover) and (pointer: fine)').matches;
 
 /** The sheet's height on small screens: the visitor sets it. Only a pull that
  *  ends near the bottom means "put it away", so pulling the sheet down a little
@@ -64,7 +67,11 @@ function storedSheet(): number {
   return SHEET_DEFAULT;
 }
 
-export const swiss = (value: number, digits: number) => value.toLocaleString('de-CH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+export const swiss = (value: number, digits: number) =>
+  value.toLocaleString('de-CH', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
 
 function megabytes(bytes: number): string {
   return swiss(bytes / (1024 * 1024), 1);
@@ -72,9 +79,11 @@ function megabytes(bytes: number): string {
 
 function routeFigures(route: Route, gradientSpan: number) {
   const kilometers = route.distance / 1000;
-  const average = route.distance > 0 ? (route.elevation / route.distance) * 100 : 0;
+  const average =
+    route.distance > 0 ? (route.elevation / route.distance) * 100 : 0;
   const start = route.points.length >= 3 ? route.points[2] : 0;
-  const summit = route.points.length >= 3 ? route.points[route.points.length - 1] : 0;
+  const summit =
+    route.points.length >= 3 ? route.points[route.points.length - 1] : 0;
   return {
     kilometers: swiss(kilometers, 1),
     average: swiss(average, 1),
@@ -94,11 +103,19 @@ export function Panel(props: PanelProps) {
   const [sheet, setSheet] = createSignal(storedSheet());
   const [shifting, setShifting] = createSignal(false);
   let panel: HTMLElement | undefined;
-  let gesture: { id: number; from: number; height: number; moved: boolean; onControl: boolean } | null = null;
+  let gesture: {
+    id: number;
+    from: number;
+    height: number;
+    moved: boolean;
+    onControl: boolean;
+  } | null = null;
 
   /** The sheet is a bottom sheet on small screens only; elsewhere the head is
    *  just a head, and there is nothing to pull. */
-  const smallScreen = () => typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches;
+  const smallScreen = () =>
+    typeof matchMedia === 'function' &&
+    matchMedia('(max-width: 900px)').matches;
 
   const toDvh = (pixels: number) => (pixels / window.innerHeight) * 100;
 
@@ -112,24 +129,39 @@ export function Panel(props: PanelProps) {
       height: box.height,
       moved: false,
       // A press on a control belongs to that control: the button keeps its click.
-      onControl: event.target instanceof Element && event.target.closest('button, a, input') !== null,
+      onControl:
+        event.target instanceof Element &&
+        event.target.closest('button, a, input') !== null,
     };
   }
 
   function dragSheet(event: PointerEvent): void {
     const started = gesture;
     if (!started || event.pointerId !== started.id) return;
-    if (!started.moved && Math.abs(started.from - event.clientY) < SHEET_SLOP_PX) return;
+    if (
+      !started.moved &&
+      Math.abs(started.from - event.clientY) < SHEET_SLOP_PX
+    )
+      return;
     if (!started.moved) {
       started.moved = true;
       // Capture only once this is a drag: capturing on the press would take the
       // head button's own click away from it.
-      event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId);
+      event.currentTarget instanceof Element &&
+        event.currentTarget.setPointerCapture(event.pointerId);
       setShifting(true);
       // The pull takes over from the tab: the sheet follows the finger.
       props.onPanelChange(true);
     }
-    setSheet(Math.min(SHEET_MAX, Math.max(toDvh(SHEET_TAB), toDvh(started.height + started.from - event.clientY))));
+    setSheet(
+      Math.min(
+        SHEET_MAX,
+        Math.max(
+          toDvh(SHEET_TAB),
+          toDvh(started.height + started.from - event.clientY),
+        ),
+      ),
+    );
   }
 
   function releaseSheet(event: PointerEvent): void {
@@ -141,7 +173,8 @@ export function Panel(props: PanelProps) {
       // fold waits for the next frame: the browser still has a click to deliver
       // from this tap, and moving the layout first would hand that click to
       // whatever moved in underneath (the map, or a route row).
-      if (!started.onControl) requestAnimationFrame(() => props.onPanelChange(!props.panelOpen));
+      if (!started.onControl)
+        requestAnimationFrame(() => props.onPanelChange(!props.panelOpen));
       return;
     }
     setShifting(false);
@@ -170,7 +203,8 @@ export function Panel(props: PanelProps) {
   /** The bar's span comes from the result set, so it always carries data. */
   const gradientSpan = () => {
     const strongest = props.routes.reduce((max, route) => {
-      const average = route.distance > 0 ? (route.elevation / route.distance) * 100 : 0;
+      const average =
+        route.distance > 0 ? (route.elevation / route.distance) * 100 : 0;
       return Math.max(max, average);
     }, 0);
     return Math.max(10, Math.ceil(strongest / 5) * 5);
@@ -192,7 +226,8 @@ export function Panel(props: PanelProps) {
 
   const actionFigure = () => {
     if (props.searching) return `${Math.round(props.searchProgress * 100)} %`;
-    if (props.load.phase !== 'ready' && props.load.phase !== 'error') return `${Math.round(props.load.progress * 100)} %`;
+    if (props.load.phase !== 'ready' && props.load.phase !== 'error')
+      return `${Math.round(props.load.progress * 100)} %`;
     if (props.area) return `${swiss(props.distanceM, 0)} m`;
     return '';
   };
@@ -213,7 +248,9 @@ export function Panel(props: PanelProps) {
       case 'index':
         return 'indexing 4 million nodes';
       case 'ready':
-        return props.searching ? 'working through the start nodes' : `graph ready · ${swiss(props.load.nodes / 1e6, 1)}M nodes`;
+        return props.searching
+          ? 'working through the start nodes'
+          : `graph ready · ${swiss(props.load.nodes / 1e6, 1)}M nodes`;
       case 'error':
         return props.load.detail ?? 'the graph could not be prepared';
       default:
@@ -243,12 +280,15 @@ export function Panel(props: PanelProps) {
   };
 
   return (
-      <aside
-        class="panel"
-        classList={{ 'panel--closed': !props.panelOpen, 'is-dragging': shifting() }}
-        style={{ '--sheet-h': `${sheet()}dvh` }}
-        ref={panel}
-      >
+    <aside
+      class="panel"
+      classList={{
+        'panel--closed': !props.panelOpen,
+        'is-dragging': shifting(),
+      }}
+      style={{ '--sheet-h': `${sheet()}dvh` }}
+      ref={panel}
+    >
       <header
         class="panel__block panel__grab"
         on:pointerdown={grabSheet}
@@ -261,7 +301,9 @@ export function Panel(props: PanelProps) {
             zill<span>hill finder</span>
           </div>
           <span class="panel__tab-figures">
-            {props.area ? `${swiss(props.nodeCount, 0)} starts · ${props.routes.length} kept` : 'no area yet'}
+            {props.area
+              ? `${swiss(props.nodeCount, 0)} starts · ${props.routes.length} kept`
+              : 'no area yet'}
           </span>
           <button
             type="button"
@@ -275,221 +317,285 @@ export function Panel(props: PanelProps) {
       </header>
       <Show when={props.panelOpen}>
         <div class="panel__body">
-        <section class="panel__block">
-          <p class="purpose">
-            draw the ground you want to climb from. zill searches the routes that start inside it and
-            keeps the steepest, distinct ones.
-          </p>
-        </section>
-
-      <section class="panel__block" aria-labelledby="area-heading">
-        <div class="label" id="area-heading">
-          search area
-        </div>
-        <Show
-          when={props.figures}
-          fallback={<p class="routes__empty">no area yet. click anywhere in switzerland to place a triangle.</p>}
-        >
-          {(figures) => (
-            <dl class="figures">
-              <dt>vertices</dt>
-              <dd>{figures().vertices}</dd>
-              <dt>area</dt>
-              <dd>{swiss(figures().hectares, 0)} ha</dd>
-              <dt>perimeter</dt>
-              <dd>{swiss(figures().perimeterKm, 1)} km</dd>
-              <dt>start nodes</dt>
-              <dd class="is-live">{props.load.phase === 'ready' ? swiss(props.nodeCount, 0) : '–'}</dd>
-            </dl>
-          )}
-        </Show>
-      </section>
-
-      <section class="panel__block controls" aria-labelledby="search-heading">
-        <div class="label" id="search-heading">
-          search
-        </div>
-        <label class="visually-hidden" for="distance">
-          target distance in metres
-        </label>
-        <div class="field">
-          <input
-            id="distance"
-            type="number"
-            min="100"
-            max="60000"
-            step="100"
-            value={props.distanceM}
-            onInput={(event) => props.onDistance(Number(event.currentTarget.value))}
-          />
-          <span class="field__unit">m</span>
-        </div>
-
-        <button
-          type="button"
-          class="action"
-          data-state={actionState()}
-          disabled={
-            props.load.phase === 'idle' ||
-            (props.load.phase !== 'ready' && props.load.phase !== 'error' && !props.searching) ||
-            (props.load.phase === 'ready' && (!props.area || (props.nodeCount === 0 && !props.searching)))
-          }
-          onClick={() => (props.searching ? props.onStop() : props.onSearch())}
-        >
-          <span class="action__fill" style={{ width: fillWidth() }} />
-          <span class="action__inner">
-            <span>{actionLabel()}</span>
-            <span>{actionFigure()}</span>
-          </span>
-        </button>
-
-        <div class="status" classList={{ 'status--error': props.load.phase === 'error' }}>
-          <span>{statusText()}</span>
-          <span>{statusFigure()}</span>
-        </div>
-        <Show when={props.load.phase === 'ready' && props.area && props.nodeCount === 0}>
-          <p class="status">
-            <span>no walkable route starts inside this area. move it or pull an edge out</span>
-          </p>
-        </Show>
-        <Show when={props.notice}>
-          <p class="status status--notice">
-            <span>{props.notice}</span>
-          </p>
-        </Show>
-        <Show when={props.load.phase !== 'ready'}>
-          <div class="rule-progress">
-            <i style={{ width: `${props.load.progress * 100}%` }} />
-          </div>
-        </Show>
-      </section>
-
-      <section class="panel__block" aria-labelledby="route-heading">
-        <div class="label" id="route-heading">
-          routes
-          {props.routes.length ? ` · ${props.routes.length} kept` : ''}
-        </div>
-        <Show
-          when={props.routes.length > 0}
-          fallback={
-            <p class="routes__empty">
-              {props.searching
-                ? 'searching. climbs appear here as they are found.'
-                : 'no routes yet. draw an area and start a search.'}
+          <section class="panel__block">
+            <p class="purpose">
+              draw the ground you want to climb from. zill searches the routes
+              that start inside it and keeps the steepest, distinct ones.
             </p>
-          }
-        >
-          <ol class="routes">
-            <For each={props.routes}>
-              {(route) => {
-                const figures = routeFigures(route, gradientSpan());
-                return (
-                  <li class="route-row">
-                    <button
-                      type="button"
-                      class="route"
-                      data-rank={route.rank}
-                      classList={{ 'is-selected': props.selectedRoute === route.rank }}
-                      aria-pressed={props.selectedRoute === route.rank}
-                      onClick={() => {
-                        const next = props.pinnedRoute === route.rank ? null : route.rank;
-                        props.onPinRoute(next);
-                        // Choosing a climb means wanting to see it.
-                        if (next !== null) props.onFocusRoute(route.rank);
-                      }}
-                      onMouseEnter={() => HOVER_CAPABLE && props.onSelectRoute(route.rank)}
-                      onMouseLeave={() => HOVER_CAPABLE && props.onSelectRoute(null)}
-                      onFocus={() => HOVER_CAPABLE && props.onSelectRoute(route.rank)}
-                      onBlur={() => HOVER_CAPABLE && props.onSelectRoute(null)}
-                    >
-                      <span class="route__rank">{route.rank}</span>
-                      <span class="route__body">
-                        <span class="route__head">
-                          <span class="route__name">
-                            <span class="label">start</span> {coordinate(route)}
-                          </span>
-                          <span class="route__gain">
-                            {swiss(route.elevation, 0)} <small>HM</small>
-                          </span>
-                        </span>
-                        <span class="route__foot">
-                          <span class="route__bar">
-                            <i style={{ width: `${figures.gradient}%` }} />
-                          </span>
-                          <span class="route__figures">
-                            {figures.kilometers} km · Ø {figures.average} % · {figures.start}→{figures.summit} m
-                          </span>
-                        </span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      class="route__gpx"
-                      onClick={() => props.onExport(route.rank)}
-                      title={`download route ${route.rank} as gpx`}
-                      aria-label={`download route ${route.rank} as gpx`}
-                    >
-                      GPX
-                    </button>
-                  </li>
-                );
-              }}
-            </For>
-          </ol>
-        </Show>
-        <Show when={props.stats && props.stats.suppressed > 0}>
-          <div class="status">
-            <span>near-duplicates suppressed</span>
-            <span>{swiss(props.stats!.suppressed, 0)}</span>
-          </div>
-        </Show>
-      </section>
+          </section>
 
-      <section class="panel__block">
-        <details class="fold">
-          <summary class="label">legend</summary>
-          <ul class="legend">
-          <li>
-            <span class="legend__mark">
-              <span class="legend__line" style={{ background: DEPTH_GRADIENT }} />
-            </span>
-            <span>route found by the search. one weight, one hue: the line darkens as the ground steepens, stretch by stretch</span>
-          </li>
-          <li>
-            <span class="legend__mark">
-              <span class="legend__badge">1</span>
-            </span>
-            <span>rank of the ten strongest climbs, set beside each summit</span>
-          </li>
-          <li>
-            <span class="legend__mark">
-              <span class="legend__start" />
-            </span>
-            <span>where the chosen climb sets off. the mark turns to face the way it goes along the first metres</span>
-          </li>
-          <li>
-            <span class="legend__mark">
-              <span class="legend__pins" />
-            </span>
-            <span>start nodes inside the area, thinned by zoom. the cost of the search</span>
-          </li>
-          <li>
-            <span class="legend__mark">
-              <span class="legend__vertex" />
-            </span>
-            <span>area point · drag it; drag anywhere on an edge to bend the area</span>
-          </li>
-          </ul>
-          <p class="legend__foot">
-            elevation gain is counted from each route's own start, along the walkable network
-            (~100 m resolution). gradient bars span 0–{gradientSpan()} %, the strongest climb found
-            so far. every route downloads as gpx. baselayer © swisstopo. source on{' '}
-            <a href="https://github.com/markbeep/zill">github</a>.
-          </p>
-        </details>
-      </section>
+          <section class="panel__block" aria-labelledby="area-heading">
+            <div class="label" id="area-heading">
+              search area
+            </div>
+            <Show
+              when={props.figures}
+              fallback={
+                <p class="routes__empty">
+                  no area yet. click anywhere in switzerland to place a
+                  triangle.
+                </p>
+              }
+            >
+              {(figures) => (
+                <dl class="figures">
+                  <dt>vertices</dt>
+                  <dd>{figures().vertices}</dd>
+                  <dt>area</dt>
+                  <dd>{swiss(figures().hectares, 0)} ha</dd>
+                  <dt>perimeter</dt>
+                  <dd>{swiss(figures().perimeterKm, 1)} km</dd>
+                  <dt>start nodes</dt>
+                  <dd class="is-live">
+                    {props.load.phase === 'ready'
+                      ? swiss(props.nodeCount, 0)
+                      : '–'}
+                  </dd>
+                </dl>
+              )}
+            </Show>
+          </section>
+
+          <section
+            class="panel__block controls"
+            aria-labelledby="search-heading"
+          >
+            <div class="label" id="search-heading">
+              search
+            </div>
+            <label class="visually-hidden" for="distance">
+              target distance in metres
+            </label>
+            <div class="field">
+              <input
+                id="distance"
+                type="number"
+                min="100"
+                max="60000"
+                step="100"
+                value={props.distanceM}
+                onInput={(event) =>
+                  props.onDistance(Number(event.currentTarget.value))
+                }
+              />
+              <span class="field__unit">m</span>
+            </div>
+
+            <button
+              type="button"
+              class="action"
+              data-state={actionState()}
+              disabled={
+                props.load.phase === 'idle' ||
+                (props.load.phase !== 'ready' &&
+                  props.load.phase !== 'error' &&
+                  !props.searching) ||
+                (props.load.phase === 'ready' &&
+                  (!props.area || (props.nodeCount === 0 && !props.searching)))
+              }
+              onClick={() =>
+                props.searching ? props.onStop() : props.onSearch()
+              }
+            >
+              <span class="action__fill" style={{ width: fillWidth() }} />
+              <span class="action__inner">
+                <span>{actionLabel()}</span>
+                <span>{actionFigure()}</span>
+              </span>
+            </button>
+
+            <div
+              class="status"
+              classList={{ 'status--error': props.load.phase === 'error' }}
+            >
+              <span>{statusText()}</span>
+              <span>{statusFigure()}</span>
+            </div>
+            <Show
+              when={
+                props.load.phase === 'ready' &&
+                props.area &&
+                props.nodeCount === 0
+              }
+            >
+              <p class="status">
+                <span>
+                  no walkable route starts inside this area. move it or pull an
+                  edge out
+                </span>
+              </p>
+            </Show>
+            <Show when={props.notice}>
+              <p class="status status--notice">
+                <span>{props.notice}</span>
+              </p>
+            </Show>
+            <Show when={props.load.phase !== 'ready'}>
+              <div class="rule-progress">
+                <i style={{ width: `${props.load.progress * 100}%` }} />
+              </div>
+            </Show>
+          </section>
+
+          <section class="panel__block" aria-labelledby="route-heading">
+            <div class="label" id="route-heading">
+              routes
+              {props.routes.length ? ` · ${props.routes.length} kept` : ''}
+            </div>
+            <Show
+              when={props.routes.length > 0}
+              fallback={
+                <p class="routes__empty">
+                  {props.searching
+                    ? 'searching. climbs appear here as they are found.'
+                    : 'no routes yet. draw an area and start a search.'}
+                </p>
+              }
+            >
+              <ol class="routes">
+                <For each={props.routes}>
+                  {(route) => {
+                    const figures = routeFigures(route, gradientSpan());
+                    return (
+                      <li class="route-row">
+                        <button
+                          type="button"
+                          class="route"
+                          data-rank={route.rank}
+                          classList={{
+                            'is-selected': props.selectedRoute === route.rank,
+                          }}
+                          aria-pressed={props.selectedRoute === route.rank}
+                          onClick={() => {
+                            const next =
+                              props.pinnedRoute === route.rank
+                                ? null
+                                : route.rank;
+                            props.onPinRoute(next);
+                            // Choosing a climb means wanting to see it.
+                            if (next !== null) props.onFocusRoute(route.rank);
+                          }}
+                          onMouseEnter={() =>
+                            HOVER_CAPABLE && props.onSelectRoute(route.rank)
+                          }
+                          onMouseLeave={() =>
+                            HOVER_CAPABLE && props.onSelectRoute(null)
+                          }
+                          onFocus={() =>
+                            HOVER_CAPABLE && props.onSelectRoute(route.rank)
+                          }
+                          onBlur={() =>
+                            HOVER_CAPABLE && props.onSelectRoute(null)
+                          }
+                        >
+                          <span class="route__rank">{route.rank}</span>
+                          <span class="route__body">
+                            <span class="route__head">
+                              <span class="route__name">
+                                <span class="label">start</span>{' '}
+                                {coordinate(route)}
+                              </span>
+                              <span class="route__gain">
+                                {swiss(route.elevation, 0)} <small>HM</small>
+                              </span>
+                            </span>
+                            <span class="route__foot">
+                              <span class="route__bar">
+                                <i style={{ width: `${figures.gradient}%` }} />
+                              </span>
+                              <span class="route__figures">
+                                {figures.kilometers} km · Ø {figures.average} %
+                                · {figures.start}→{figures.summit} m
+                              </span>
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          class="route__gpx"
+                          onClick={() => props.onExport(route.rank)}
+                          title={`download route ${route.rank} as gpx`}
+                          aria-label={`download route ${route.rank} as gpx`}
+                        >
+                          GPX
+                        </button>
+                      </li>
+                    );
+                  }}
+                </For>
+              </ol>
+            </Show>
+            <Show when={props.stats && props.stats.suppressed > 0}>
+              <div class="status">
+                <span>near-duplicates suppressed</span>
+                <span>{swiss(props.stats!.suppressed, 0)}</span>
+              </div>
+            </Show>
+          </section>
+
+          <section class="panel__block">
+            <details class="fold">
+              <summary class="label">legend</summary>
+              <ul class="legend">
+                <li>
+                  <span class="legend__mark">
+                    <span
+                      class="legend__line"
+                      style={{ background: DEPTH_GRADIENT }}
+                    />
+                  </span>
+                  <span>
+                    route found by the search. one weight, one hue: the line
+                    darkens as the ground steepens, stretch by stretch
+                  </span>
+                </li>
+                <li>
+                  <span class="legend__mark">
+                    <span class="legend__badge">1</span>
+                  </span>
+                  <span>
+                    rank of the ten strongest climbs, set beside each summit
+                  </span>
+                </li>
+                <li>
+                  <span class="legend__mark">
+                    <span class="legend__start" />
+                  </span>
+                  <span>
+                    where the chosen climb sets off. the mark turns to face the
+                    way it goes along the first metres
+                  </span>
+                </li>
+                <li>
+                  <span class="legend__mark">
+                    <span class="legend__pins" />
+                  </span>
+                  <span>
+                    start nodes inside the area, thinned by zoom. the cost of
+                    the search
+                  </span>
+                </li>
+                <li>
+                  <span class="legend__mark">
+                    <span class="legend__vertex" />
+                  </span>
+                  <span>
+                    area point · drag it; drag anywhere on an edge to bend the
+                    area
+                  </span>
+                </li>
+              </ul>
+              <p class="legend__foot">
+                elevation gain is counted from each route's own start, along the
+                walkable network (~100 m resolution). gradient bars span 0–
+                {gradientSpan()} %, the strongest climb found so far. every
+                route downloads as gpx. baselayer © swisstopo. source on{' '}
+                <a href="https://github.com/markbeep/zill">github</a>.
+              </p>
+            </details>
+          </section>
         </div>
       </Show>
-      </aside>
+    </aside>
   );
 }

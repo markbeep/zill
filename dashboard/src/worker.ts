@@ -3,8 +3,21 @@
 // painting while a 145 MB graph is indexed and searched.
 
 import { GridSampler } from './cluster';
-import { GRAPH_ASSET, NODE_PAGE, NODE_PAGES_INTERACTIVE, PINPRICK_LIMIT, WASM_ASSET } from './wasm';
-import type { FromWorker, LoadState, Route, SearchRequest, SearchStats, ToWorker } from './wasm';
+import {
+  GRAPH_ASSET,
+  NODE_PAGE,
+  NODE_PAGES_INTERACTIVE,
+  PINPRICK_LIMIT,
+  WASM_ASSET,
+} from './wasm';
+import type {
+  FromWorker,
+  LoadState,
+  Route,
+  SearchRequest,
+  SearchStats,
+  ToWorker,
+} from './wasm';
 import type { LngLat } from './area';
 
 type Wasm = {
@@ -18,7 +31,14 @@ type Wasm = {
   zi_area_count(points: number, count: number): number;
   zi_area_begin(points: number, count: number): number;
   zi_area_page(offset: number, out: number, cap: number): number;
-  zi_search_start(points: number, count: number, maxDistance: number, maxElevation: number, maxResults: number, dedupPermille: number): number;
+  zi_search_start(
+    points: number,
+    count: number,
+    maxDistance: number,
+    maxElevation: number,
+    maxResults: number,
+    dedupPermille: number,
+  ): number;
   zi_search_step(budget: number): number;
   zi_search_stats(out: number): void;
   zi_route_count(): number;
@@ -85,7 +105,11 @@ function f32View(offset: number, length: number): Float32Array {
 }
 
 function writePolygon(area: LngLat[]): void {
-  const pairs = new Float64Array(wasm!.memory.buffer, scratch + POLY_OFF, area.length * 2);
+  const pairs = new Float64Array(
+    wasm!.memory.buffer,
+    scratch + POLY_OFF,
+    area.length * 2,
+  );
   area.forEach((point, i) => {
     pairs[i * 2] = point.lat;
     pairs[i * 2 + 1] = point.lng;
@@ -113,12 +137,19 @@ function loadErrorCode(status: number): string {
 function tarMemberSize(header: Uint8Array): number {
   const field = new TextDecoder().decode(header.subarray(124, 136)).trim();
   const size = parseInt(field, 8);
-  if (!Number.isFinite(size) || size <= 0) throw new Error('graph archive is empty or malformed');
+  if (!Number.isFinite(size) || size <= 0)
+    throw new Error('graph archive is empty or malformed');
   return size;
 }
 
 async function fetchGraph(): Promise<void> {
-  emitLoad({ phase: 'download', received: 0, inflated: 0, progress: 0, detail: 'requesting the walkable Switzerland graph' });
+  emitLoad({
+    phase: 'download',
+    received: 0,
+    inflated: 0,
+    progress: 0,
+    detail: 'requesting the walkable Switzerland graph',
+  });
   const response = await fetch(GRAPH_ASSET);
   if (!response.ok || !response.body) {
     throw new Error(
@@ -150,7 +181,12 @@ async function fetchGraph(): Promise<void> {
   // `DecompressionStream` is typed over `BufferSource`, which does not line up
   // with the chunked stream the browser hands back; the cast is the lib's, not ours.
   const decompressed: ReadableStream<Uint8Array> = gzipped
-    ? rest.pipeThrough(new DecompressionStream('gzip') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>)
+    ? rest.pipeThrough(
+        new DecompressionStream('gzip') as unknown as ReadableWritablePair<
+          Uint8Array,
+          Uint8Array
+        >,
+      )
     : rest;
   const reader = decompressed.getReader();
   const headerBuffer = new Uint8Array(512);
@@ -175,7 +211,8 @@ async function fetchGraph(): Promise<void> {
       if (headerFilled < headerBuffer.length) continue;
       graphBytes = tarMemberSize(headerBuffer);
       target = wasm!.zi_reserve(graphBytes);
-      if (target === 0) throw new Error('the browser could not reserve memory for the graph');
+      if (target === 0)
+        throw new Error('the browser could not reserve memory for the graph');
       emitLoad({ phase: 'decompress', total, graphBytes });
     }
 
@@ -184,7 +221,10 @@ async function fetchGraph(): Promise<void> {
       // the header's size is the truth, so stop there.
       const take = Math.min(graphBytes - written, chunk.length);
       if (take > 0) {
-        new Uint8Array(wasm!.memory.buffer, target, graphBytes).set(chunk.subarray(0, take), written);
+        new Uint8Array(wasm!.memory.buffer, target, graphBytes).set(
+          chunk.subarray(0, take),
+          written,
+        );
         written += take;
       }
     }
@@ -207,12 +247,14 @@ async function fetchGraph(): Promise<void> {
     }
   }
 
-  if (written !== graphBytes) throw new Error('graph archive ended before the file was complete');
+  if (written !== graphBytes)
+    throw new Error('graph archive ended before the file was complete');
 
   const status = wasm!.zi_load_graph();
   if (status !== 0) throw new Error(loadErrorCode(status));
   scratch = wasm!.zi_scratch();
-  if (scratch === 0 || wasm!.zi_scratch_len() < SCRATCH_MIN) throw new Error('the module exposes no scratch buffer');
+  if (scratch === 0 || wasm!.zi_scratch_len() < SCRATCH_MIN)
+    throw new Error('the module exposes no scratch buffer');
 
   wasm!.zi_graph_info(scratch + STATS_OFF);
   const [nodes, edges] = u32View(STATS_OFF, 6);
@@ -232,7 +274,9 @@ async function buildIndex(): Promise<void> {
     if (more < 0) throw new Error('the graph index could not be built');
     wasm!.zi_graph_info(scratch + STATS_OFF);
     const progress = u32View(STATS_OFF, 6)[3] / 1000;
-    emitLoad({ progress: WEIGHT_DOWNLOAD + WEIGHT_DECOMPRESS + progress * WEIGHT_INDEX });
+    emitLoad({
+      progress: WEIGHT_DOWNLOAD + WEIGHT_DECOMPRESS + progress * WEIGHT_INDEX,
+    });
     if (more === 0) break;
     await yieldToEventLoop();
   }
@@ -245,15 +289,21 @@ async function ensureGraph(): Promise<void> {
   try {
     if (wasm === null) {
       const source = await fetch(WASM_ASSET);
-      if (!source.ok) throw new Error(`wasm module missing (status ${source.status})`);
+      if (!source.ok)
+        throw new Error(`wasm module missing (status ${source.status})`);
       const module = await WebAssembly.compile(await source.arrayBuffer());
-      wasm = (await WebAssembly.instantiate(module, {})).exports as unknown as Wasm;
+      wasm = (await WebAssembly.instantiate(module, {}))
+        .exports as unknown as Wasm;
     }
     // `fetchGraph` leaves the load state in `index` once the bytes are in place.
     if (load.phase === 'idle' || load.phase === 'error') await fetchGraph();
     if (load.phase === 'index') await buildIndex();
   } catch (error) {
-    load = { ...load, phase: 'error', detail: error instanceof Error ? error.message : String(error) };
+    load = {
+      ...load,
+      phase: 'error',
+      detail: error instanceof Error ? error.message : String(error),
+    };
     scope.postMessage({ type: 'load', state: load });
   }
 }
@@ -264,7 +314,10 @@ function queryArea(area: LngLat[]): void {
     return;
   }
   writePolygon(area);
-  scope.postMessage({ type: 'area', count: wasm.zi_area_count(scratch + POLY_OFF, area.length) });
+  scope.postMessage({
+    type: 'area',
+    count: wasm.zi_area_count(scratch + POLY_OFF, area.length),
+  });
 }
 
 /** One cell of the area's own bounding box, sized so the limit holds. */
@@ -297,8 +350,12 @@ function queryNodes(area: LngLat[], interactive: boolean): void {
   // While the figure is dragged, sample pages spread across the whole list —
   // reading only its head would show one corner of the area and call it the
   // field. The settle then reads every page.
-  const pages = interactive ? NODE_PAGES_INTERACTIVE : Math.ceil(total / NODE_PAGE);
-  const step = interactive ? Math.max(NODE_PAGE, Math.floor(total / pages)) : NODE_PAGE;
+  const pages = interactive
+    ? NODE_PAGES_INTERACTIVE
+    : Math.ceil(total / NODE_PAGE);
+  const step = interactive
+    ? Math.max(NODE_PAGE, Math.floor(total / pages))
+    : NODE_PAGE;
   let read = 0;
   for (let offset = 0; offset < total && read < pages; offset += step, read++) {
     const written = wasm.zi_area_page(offset, scratch + COORDS_OFF, NODE_PAGE);
@@ -306,7 +363,8 @@ function queryNodes(area: LngLat[], interactive: boolean): void {
     const pairs = f32View(COORDS_OFF, written * 2);
     // `add` also returns false for a node that shares an occupied cell; only the
     // sampler being full ends the read.
-    for (let i = 0; i < written; i++) sampler.add(pairs[i * 2], pairs[i * 2 + 1]);
+    for (let i = 0; i < written; i++)
+      sampler.add(pairs[i * 2], pairs[i * 2 + 1]);
     if (sampler.size >= PINPRICK_LIMIT) break;
   }
   const points = sampler.toArray();
@@ -318,7 +376,11 @@ function readRoutes(count: number): Route[] {
   for (let index = 0; index < count; index++) {
     if (wasm!.zi_route_meta(index, scratch + STATS_OFF) !== 0) break;
     const [startIndex, elevation, distance, pointCount] = u32View(STATS_OFF, 4);
-    const required = wasm!.zi_route_points(index, scratch + COORDS_OFF, (SCRATCH_MIN - COORDS_OFF - 256) / 4);
+    const required = wasm!.zi_route_points(
+      index,
+      scratch + COORDS_OFF,
+      (SCRATCH_MIN - COORDS_OFF - 256) / 4,
+    );
     const points = new Float32Array(required);
     points.set(f32View(COORDS_OFF, required));
     found.push({ rank: index + 1, startIndex, elevation, distance, points });
@@ -330,7 +392,16 @@ function readRoutes(count: number): Route[] {
 function reportSearch(force = false): void {
   if (wasm === null || load.phase !== 'ready') return;
   wasm.zi_search_stats(scratch + STATS_OFF);
-  const [scanned, total, considered, accepted, suppressed, bestElevation, finished, revision] = u32View(STATS_OFF, 8);
+  const [
+    scanned,
+    total,
+    considered,
+    accepted,
+    suppressed,
+    bestElevation,
+    finished,
+    revision,
+  ] = u32View(STATS_OFF, 8);
   const stats: SearchStats = {
     scanned,
     total,
@@ -347,7 +418,12 @@ function reportSearch(force = false): void {
     routes = wasm.zi_route_count() > 0 ? readRoutes(wasm.zi_route_count()) : [];
   }
   scope.postMessage(
-    { type: 'search', stats, routes: changed ? routes : [], routesChanged: changed },
+    {
+      type: 'search',
+      stats,
+      routes: changed ? routes : [],
+      routesChanged: changed,
+    },
     [],
   );
 }
@@ -361,7 +437,10 @@ function pump(): void {
   while (more === 1 && performance.now() - started < 24) {
     more = wasm.zi_search_step(256);
     if (more < 0) {
-      emitLoad({ phase: 'error', detail: 'the search failed inside the graph module' });
+      emitLoad({
+        phase: 'error',
+        detail: 'the search failed inside the graph module',
+      });
       return;
     }
   }
@@ -376,7 +455,8 @@ function stopSearch(): void {
 }
 
 function startSearch(request: SearchRequest): void {
-  if (wasm === null || load.phase !== 'ready' || request.area.length < 3) return;
+  if (wasm === null || load.phase !== 'ready' || request.area.length < 3)
+    return;
   stopSearch();
   writePolygon(request.area);
   lastRevision = -1;
@@ -393,7 +473,12 @@ function startSearch(request: SearchRequest): void {
     // rather than leaving the host waiting for progress.
     routes = [];
     const empty: SearchStats = { ...emptyStats, finished: true, revision: 1 };
-    scope.postMessage({ type: 'search', stats: empty, routes: [], routesChanged: true });
+    scope.postMessage({
+      type: 'search',
+      stats: empty,
+      routes: [],
+      routesChanged: true,
+    });
     return;
   }
   reportSearch(true);

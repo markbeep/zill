@@ -4,7 +4,8 @@
 
 import type { LngLat } from './area';
 
-export type LoadPhase = 'idle' | 'download' | 'decompress' | 'index' | 'ready' | 'error';
+export type LoadPhase =
+  'idle' | 'download' | 'decompress' | 'index' | 'ready' | 'error';
 
 export type LoadState = {
   phase: LoadPhase;
@@ -60,7 +61,12 @@ export type FromWorker =
   | { type: 'load'; state: LoadState }
   | { type: 'area'; count: number }
   | { type: 'nodes'; points: Float32Array; total: number }
-  | { type: 'search'; stats: SearchStats; routes: Route[]; routesChanged: boolean };
+  | {
+      type: 'search';
+      stats: SearchStats;
+      routes: Route[];
+      routesChanged: boolean;
+    };
 
 export const GRAPH_ASSET = '/graph.tar.gz';
 /** Built by `just wasm` and served from the site root. */
@@ -83,19 +89,27 @@ export class ZillWorker {
   onError: (message: string) => void = () => {};
   onArea: (count: number) => void = () => {};
   onNodes: (points: Float32Array, total: number) => void = () => {};
-  onSearch: (stats: SearchStats, routes: Route[], routesChanged: boolean) => void = () => {};
+  onSearch: (
+    stats: SearchStats,
+    routes: Route[],
+    routesChanged: boolean,
+  ) => void = () => {};
 
   constructor() {
-    this.worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    this.worker = new Worker(new URL('./worker.ts', import.meta.url), {
+      type: 'module',
+    });
     this.worker.onerror = (event: ErrorEvent) => {
       this.onError(event.message || 'the graph worker stopped');
     };
-    this.worker.onmessageerror = () => this.onError('the graph worker sent a message that could not be read');
+    this.worker.onmessageerror = () =>
+      this.onError('the graph worker sent a message that could not be read');
     this.worker.onmessage = (event: MessageEvent<FromWorker>) => {
       const message = event.data;
       if (message.type === 'load') this.onLoad(message.state);
       else if (message.type === 'area') this.onArea(message.count);
-      else if (message.type === 'nodes') this.onNodes(message.points, message.total);
+      else if (message.type === 'nodes')
+        this.onNodes(message.points, message.total);
       else this.onSearch(message.stats, message.routes, message.routesChanged);
     };
   }

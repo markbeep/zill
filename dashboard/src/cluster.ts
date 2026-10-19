@@ -17,7 +17,8 @@ export class GridSampler {
   /** Returns false once the limit is reached or the cell already holds a point. */
   add(lat: number, lng: number): boolean {
     if (this.count >= this.limit) return false;
-    const key = Math.floor(lat / this.cell) * this.cols + Math.floor(lng / this.cell);
+    const key =
+      Math.floor(lat / this.cell) * this.cols + Math.floor(lng / this.cell);
     if (this.cells.has(key)) return false;
     this.cells.add(key);
     this.buf[this.count * 2] = lat;

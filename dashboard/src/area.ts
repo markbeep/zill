@@ -31,11 +31,19 @@ export function initialTriangle(center: LngLat): LngLat[] {
   });
 }
 
-export function moveVertex(area: LngLat[], index: number, to: LngLat): LngLat[] {
+export function moveVertex(
+  area: LngLat[],
+  index: number,
+  to: LngLat,
+): LngLat[] {
   return area.map((point, i) => (i === index ? to : point));
 }
 
-export function insertVertex(area: LngLat[], edge: number, at: LngLat): LngLat[] {
+export function insertVertex(
+  area: LngLat[],
+  edge: number,
+  at: LngLat,
+): LngLat[] {
   const next = [...area];
   next.splice(edge + 1, 0, at);
   return next;
@@ -92,12 +100,19 @@ export function haversineMeters(a: LngLat, b: LngLat): number {
   const sinLng = Math.sin(dLng / 2);
   const h =
     sinLat * sinLat +
-    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * sinLng * sinLng;
+    Math.cos((a.lat * Math.PI) / 180) *
+      Math.cos((b.lat * Math.PI) / 180) *
+      sinLng *
+      sinLng;
   return 2 * r * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 export function perimeterM(area: LngLat[]): number {
-  return area.reduce((total, point, i) => total + haversineMeters(point, area[(i + 1) % area.length]), 0);
+  return area.reduce(
+    (total, point, i) =>
+      total + haversineMeters(point, area[(i + 1) % area.length]),
+    0,
+  );
 }
 
 /** Shoelace area in square metres, on a local equirectangular frame. */
@@ -113,7 +128,10 @@ export function areaM2(area: LngLat[]): number {
   return Math.abs(sum / 2) * metersPerLng * M_PER_DEG_LAT;
 }
 
-export function nearestVertex(screen: ScreenPoint[], at: ScreenPoint): number | null {
+export function nearestVertex(
+  screen: ScreenPoint[],
+  at: ScreenPoint,
+): number | null {
   let best: number | null = null;
   let bestDistance = VERTEX_HIT_PX;
   screen.forEach((point, i) => {
@@ -126,11 +144,21 @@ export function nearestVertex(screen: ScreenPoint[], at: ScreenPoint): number | 
   return best;
 }
 
-function distanceToSegment(p: ScreenPoint, a: ScreenPoint, b: ScreenPoint): number {
+function distanceToSegment(
+  p: ScreenPoint,
+  a: ScreenPoint,
+  b: ScreenPoint,
+): number {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const lengthSq = dx * dx + dy * dy;
-  const t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq));
+  const t =
+    lengthSq === 0
+      ? 0
+      : Math.max(
+          0,
+          Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq),
+        );
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
@@ -140,13 +168,20 @@ export function insidePolygon(screen: ScreenPoint[], at: ScreenPoint): boolean {
   for (let i = 0, j = screen.length - 1; i < screen.length; j = i++) {
     const a = screen[i];
     const b = screen[j];
-    if (a.y > at.y !== b.y > at.y && at.x < ((b.x - a.x) * (at.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    if (
+      a.y > at.y !== b.y > at.y &&
+      at.x < ((b.x - a.x) * (at.y - a.y)) / (b.y - a.y) + a.x
+    )
+      inside = !inside;
   }
   return inside;
 }
 
 /** Index of the edge (from its first vertex) nearest the pointer. */
-export function nearestEdge(screen: ScreenPoint[], at: ScreenPoint): number | null {
+export function nearestEdge(
+  screen: ScreenPoint[],
+  at: ScreenPoint,
+): number | null {
   let best: number | null = null;
   let bestDistance = EDGE_HIT_PX;
   screen.forEach((point, i) => {

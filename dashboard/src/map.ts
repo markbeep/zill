@@ -25,7 +25,12 @@ const WMTS = 'https://wmts.geo.admin.ch/1.0.0';
 const SWITZERLAND: [number, number] = [8.23, 46.82];
 
 /** The walkable graph's own extent: outside it there is nothing to search. */
-const DATA_BOUNDS = { west: 5.9509, east: 10.5084, south: 45.8133, north: 47.811 };
+const DATA_BOUNDS = {
+  west: 5.9509,
+  east: 10.5084,
+  south: 45.8133,
+  north: 47.811,
+};
 
 /** How far the camera may leave that extent, so the country can be seen with
  *  ground around it rather than pinned to its own border. The swisstopo sheets
@@ -35,7 +40,8 @@ const DATA_BOUNDS = { west: 5.9509, east: 10.5084, south: 45.8133, north: 47.811
 const CAMERA_MARGIN_KM = 40;
 
 function cameraBounds(marginKm: number): maplibregl.LngLatBounds {
-  const midLat = ((DATA_BOUNDS.north + DATA_BOUNDS.south) / 2) * (Math.PI / 180);
+  const midLat =
+    ((DATA_BOUNDS.north + DATA_BOUNDS.south) / 2) * (Math.PI / 180);
   const dLng = marginKm / (111.32 * Math.cos(midLat));
   const dLat = marginKm / 110.57;
   return new maplibregl.LngLatBounds(
@@ -60,7 +66,12 @@ export const GRADE_DEPTH: [number, string][] = [
   [48, '#14161a'],
 ];
 /** Colours by the grade of each drawn stretch, not by the route's average. */
-const GRADE_COLOR = ['interpolate', ['linear'], ['get', 'grade'], ...GRADE_DEPTH.flat()] as DataDrivenPropertyValueSpecification<string>;
+const GRADE_COLOR = [
+  'interpolate',
+  ['linear'],
+  ['get', 'grade'],
+  ...GRADE_DEPTH.flat(),
+] as DataDrivenPropertyValueSpecification<string>;
 
 export type Basemap = 'shade' | 'topo' | 'satellite';
 
@@ -70,7 +81,11 @@ export class CourseMap {
   onRouteHover: (rank: number | null) => void = () => {};
   /** Fired when a route line is clicked (null for a click on empty sheet). */
   onRouteClick: (rank: number | null) => void = () => {};
-  private badges: { marker: maplibregl.Marker; badge: HTMLElement; route: Route }[] = [];
+  private badges: {
+    marker: maplibregl.Marker;
+    badge: HTMLElement;
+    route: Route;
+  }[] = [];
   private startMarker: maplibregl.Marker | null = null;
   /** Sources only exist after the style loads; until then, updates are held. */
   private styled = false;
@@ -93,35 +108,47 @@ export class CourseMap {
         sources: {
           relief: {
             type: 'raster',
-            tiles: [`${WMTS}/ch.swisstopo.swissalti3d-reliefschattierung/default/current/3857/{z}/{x}/{y}.png`],
+            tiles: [
+              `${WMTS}/ch.swisstopo.swissalti3d-reliefschattierung/default/current/3857/{z}/{x}/{y}.png`,
+            ],
             tileSize: 256,
             minzoom: 6,
             maxzoom: 17,
-            attribution: '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · relief',
+            attribution:
+              '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · relief',
           },
           sheet: {
             type: 'raster',
-            tiles: [`${WMTS}/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg`],
+            tiles: [
+              `${WMTS}/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg`,
+            ],
             tileSize: 256,
             minzoom: 6,
             maxzoom: 17,
-            attribution: '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · pixelkarte grau',
+            attribution:
+              '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · pixelkarte grau',
           },
           satellite: {
             type: 'raster',
-            tiles: [`${WMTS}/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg`],
+            tiles: [
+              `${WMTS}/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg`,
+            ],
             tileSize: 256,
             minzoom: 6,
             maxzoom: 17,
-            attribution: '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · SWISSIMAGE',
+            attribution:
+              '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · SWISSIMAGE',
           },
           names: {
             type: 'raster',
-            tiles: [`${WMTS}/ch.swisstopo.vec200-names-namedlocation/default/current/3857/{z}/{x}/{y}.png`],
+            tiles: [
+              `${WMTS}/ch.swisstopo.vec200-names-namedlocation/default/current/3857/{z}/{x}/{y}.png`,
+            ],
             tileSize: 256,
             minzoom: 12,
             maxzoom: 17,
-            attribution: '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · names',
+            attribution:
+              '© <a href="https://www.swisstopo.admin.ch/">swisstopo</a> · names',
           },
           area: { type: 'geojson', data: emptyCollection() },
           user: { type: 'geojson', data: emptyCollection() },
@@ -132,14 +159,36 @@ export class CourseMap {
         layers: [
           // The ground stays quieter than the course on it: a cluttered sheet
           // costs legibility, and the routes are what the surface is for.
-          { id: 'relief', type: 'raster', source: 'relief', paint: { 'raster-opacity': 0.38 } },
-          { id: 'sheet', type: 'raster', source: 'sheet', paint: { 'raster-opacity': 0.74 } },
-          { id: 'satellite', type: 'raster', source: 'satellite', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85 } },
+          {
+            id: 'relief',
+            type: 'raster',
+            source: 'relief',
+            paint: { 'raster-opacity': 0.38 },
+          },
+          {
+            id: 'sheet',
+            type: 'raster',
+            source: 'sheet',
+            paint: { 'raster-opacity': 0.74 },
+          },
+          {
+            id: 'satellite',
+            type: 'raster',
+            source: 'satellite',
+            layout: { visibility: 'none' },
+            paint: { 'raster-opacity': 0.85 },
+          },
           // Labels the sheet already carries, for the grounds that carry none:
           // white-haloed, so they hold over pale shading and dark imagery alike.
           // Below their own zoom there is no transparent names source at all, so
           // the grounds simply carry no names there.
-          { id: 'names', type: 'raster', source: 'names', minzoom: 12, layout: { visibility: 'none' } },
+          {
+            id: 'names',
+            type: 'raster',
+            source: 'names',
+            minzoom: 12,
+            layout: { visibility: 'none' },
+          },
           {
             id: 'area-veil',
             type: 'fill',
@@ -158,7 +207,11 @@ export class CourseMap {
             id: 'area-casing',
             type: 'line',
             source: 'area',
-            paint: { 'line-color': PAPER, 'line-width': 5, 'line-opacity': 0.7 },
+            paint: {
+              'line-color': PAPER,
+              'line-width': 5,
+              'line-opacity': 0.7,
+            },
           },
           {
             id: 'area-line',
@@ -172,7 +225,15 @@ export class CourseMap {
             source: 'starts',
             paint: {
               // Small on purpose: the field reads as texture, never as blobs.
-              'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 1, 14, 2.1],
+              'circle-radius': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                8,
+                1,
+                14,
+                2.1,
+              ],
               'circle-color': OVERPRINT,
               'circle-opacity': 0.4,
             },
@@ -182,7 +243,15 @@ export class CourseMap {
             type: 'circle',
             source: 'user',
             paint: {
-              'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 6, 16, 60],
+              'circle-radius': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                8,
+                6,
+                16,
+                60,
+              ],
               'circle-color': OVERPRINT,
               'circle-opacity': 0.12,
             },
@@ -192,7 +261,15 @@ export class CourseMap {
             type: 'circle',
             source: 'user',
             paint: {
-              'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4, 16, 7],
+              'circle-radius': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                8,
+                4,
+                16,
+                7,
+              ],
               'circle-color': PAPER,
               'circle-stroke-color': OVERPRINT,
               'circle-stroke-width': 2.5,
@@ -228,7 +305,11 @@ export class CourseMap {
             source: 'routes',
             filter: ['==', ['get', 'selected'], true],
             layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: { 'line-color': OVERPRINT, 'line-width': 9, 'line-opacity': 1 },
+            paint: {
+              'line-color': OVERPRINT,
+              'line-width': 9,
+              'line-opacity': 1,
+            },
           },
           {
             id: 'vertices',
@@ -254,8 +335,14 @@ export class CourseMap {
       touchPitch: false,
     });
 
-    this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-    this.map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: 'metric' }), 'bottom-left');
+    this.map.addControl(
+      new maplibregl.NavigationControl({ showCompass: false }),
+      'top-right',
+    );
+    this.map.addControl(
+      new maplibregl.ScaleControl({ maxWidth: 110, unit: 'metric' }),
+      'bottom-left',
+    );
     this.map.addControl(
       new maplibregl.AttributionControl({
         compact: true,
@@ -282,7 +369,10 @@ export class CourseMap {
     });
     this.map.on('click', (event) => {
       // Layer handlers run first; a click that hit no route clears the pin.
-      if (this.map.queryRenderedFeatures(event.point, { layers: ['routes'] }).length === 0) {
+      if (
+        this.map.queryRenderedFeatures(event.point, { layers: ['routes'] })
+          .length === 0
+      ) {
         this.onRouteClick(null);
       }
     });
@@ -310,16 +400,36 @@ export class CourseMap {
     if (!this.styled) return;
     // The shading is the ground under all three. Only the shade ground shows it
     // on its own, so only there does it carry the full weight.
-    this.map.setPaintProperty('relief', 'raster-opacity', kind === 'shade' ? 0.88 : 0.38);
-    this.map.setLayoutProperty('sheet', 'visibility', kind === 'topo' ? 'visible' : 'none');
-    this.map.setLayoutProperty('satellite', 'visibility', kind === 'satellite' ? 'visible' : 'none');
+    this.map.setPaintProperty(
+      'relief',
+      'raster-opacity',
+      kind === 'shade' ? 0.88 : 0.38,
+    );
+    this.map.setLayoutProperty(
+      'sheet',
+      'visibility',
+      kind === 'topo' ? 'visible' : 'none',
+    );
+    this.map.setLayoutProperty(
+      'satellite',
+      'visibility',
+      kind === 'satellite' ? 'visible' : 'none',
+    );
     // The greyscale sheet prints its own names; the other two grounds borrow these.
-    this.map.setLayoutProperty('names', 'visibility', kind === 'topo' ? 'none' : 'visible');
+    this.map.setLayoutProperty(
+      'names',
+      'visibility',
+      kind === 'topo' ? 'none' : 'visible',
+    );
   }
 
   /** Takes the camera to a place the search found. */
   showPlace(at: LngLat, zoom: number): void {
-    this.map.flyTo({ center: [at.lng, at.lat], zoom, duration: this.cameraMs(700) });
+    this.map.flyTo({
+      center: [at.lng, at.lat],
+      zoom,
+      duration: this.cameraMs(700),
+    });
   }
 
   /** Frames one chosen climb: tapping its row means "show me this". */
@@ -327,8 +437,13 @@ export class CourseMap {
     if (route.points.length < 3) return;
     const first: [number, number] = [route.points[1], route.points[0]];
     const bounds = new maplibregl.LngLatBounds(first, first);
-    for (let i = 0; i < route.points.length; i += 3) bounds.extend([route.points[i + 1], route.points[i]]);
-    this.map.fitBounds(bounds, { padding: this.sheetPadding(60), duration: this.cameraMs(500), maxZoom: 14.5 });
+    for (let i = 0; i < route.points.length; i += 3)
+      bounds.extend([route.points[i + 1], route.points[i]]);
+    this.map.fitBounds(bounds, {
+      padding: this.sheetPadding(60),
+      duration: this.cameraMs(500),
+      maxZoom: 14.5,
+    });
   }
 
   /** Shows the visitor's own position, with the accuracy it was reported with. */
@@ -348,7 +463,9 @@ export class CourseMap {
 
   clearUserLocation(): void {
     if (!this.styled) return;
-    (this.map.getSource('user') as maplibregl.GeoJSONSource).setData(emptyCollection());
+    (this.map.getSource('user') as maplibregl.GeoJSONSource).setData(
+      emptyCollection(),
+    );
   }
 
   ready(): Promise<void> {
@@ -393,7 +510,16 @@ export class CourseMap {
     (this.map.getSource('area') as maplibregl.GeoJSONSource).setData({
       type: 'FeatureCollection',
       features: ring.length
-        ? [{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring.map((p) => [p.lng, p.lat])] } }]
+        ? [
+            {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'Polygon',
+                coordinates: [ring.map((p) => [p.lng, p.lat])],
+              },
+            },
+          ]
         : [],
     });
     (this.map.getSource('vertices') as maplibregl.GeoJSONSource).setData({
@@ -424,7 +550,10 @@ export class CourseMap {
         });
       }
     }
-    (this.map.getSource('starts') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
+    (this.map.getSource('starts') as maplibregl.GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features,
+    });
   }
 
   setRoutes(routes: Route[], selectedRank: number | null): void {
@@ -435,7 +564,11 @@ export class CourseMap {
     for (const route of routes) {
       const points: { lat: number; lng: number; ele: number }[] = [];
       for (let i = 0; i < route.points.length; i += 3) {
-        points.push({ lat: route.points[i], lng: route.points[i + 1], ele: route.points[i + 2] });
+        points.push({
+          lat: route.points[i],
+          lng: route.points[i + 1],
+          ele: route.points[i + 2],
+        });
       }
       if (points.length < 2) continue;
 
@@ -451,7 +584,11 @@ export class CourseMap {
         // Smooth over three segments so a single DEM step does not read as a cliff.
         let weighted = 0;
         let weight = 0;
-        for (let j = Math.max(0, i - 1); j <= Math.min(raw.length - 1, i + 1); j++) {
+        for (
+          let j = Math.max(0, i - 1);
+          j <= Math.min(raw.length - 1, i + 1);
+          j++
+        ) {
           weighted += raw[j] * runs[j];
           weight += runs[j];
         }
@@ -462,12 +599,19 @@ export class CourseMap {
         ];
         features.push({
           type: 'Feature',
-          properties: { rank: route.rank, grade: Number(grade.toFixed(2)), selected: route.rank === selectedRank },
+          properties: {
+            rank: route.rank,
+            grade: Number(grade.toFixed(2)),
+            selected: route.rank === selectedRank,
+          },
           geometry: { type: 'LineString', coordinates },
         });
       }
     }
-    (this.map.getSource('routes') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
+    (this.map.getSource('routes') as maplibregl.GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features,
+    });
 
     for (const badge of this.badges) badge.marker.remove();
     this.badges = routes.slice(0, BADGE_LIMIT).map((route) => {
@@ -481,7 +625,10 @@ export class CourseMap {
       if (route.rank === selectedRank) badge.classList.add('is-selected');
       holder.appendChild(badge);
       const last = route.points.length - 3;
-      const marker = new maplibregl.Marker({ element: holder, anchor: 'center' })
+      const marker = new maplibregl.Marker({
+        element: holder,
+        anchor: 'center',
+      })
         .setLngLat([route.points[last + 1], route.points[last]])
         .addTo(this.map);
       return { marker, badge, route };
@@ -499,22 +646,34 @@ export class CourseMap {
       // Candidates follow this route's own tail: sideways or back along its
       // final segment, never off toward a neighbouring line.
       // The point before the summit: its longitude at last-2, latitude at last-3.
-      const tail = last >= 3 ? this.map.project([route.points[last - 2], route.points[last - 3]]) : at;
+      const tail =
+        last >= 3
+          ? this.map.project([route.points[last - 2], route.points[last - 3]])
+          : at;
       const dx = at.x - tail.x;
       const dy = at.y - tail.y;
       const length = Math.hypot(dx, dy) || 1;
       const along: [number, number] = [dx / length, dy / length];
       const across: [number, number] = [-along[1], along[0]];
-      const at2 = (axis: [number, number], distance: number): [number, number] => [axis[0] * distance, axis[1] * distance];
+      const at2 = (
+        axis: [number, number],
+        distance: number,
+      ): [number, number] => [axis[0] * distance, axis[1] * distance];
       const clearance = 20;
       const ring: [number, number][] = [
         [0, 0],
-        at2(across, clearance), at2(across, -clearance),
-        at2(along, clearance + 2), at2(along, -(clearance + 2)),
-        at2(across, clearance * 1.7), at2(across, -clearance * 1.7),
-        at2(along, clearance * 1.9), at2(along, -(clearance * 1.9)),
-        at2(across, clearance * 2.4), at2(across, -(clearance * 2.4)),
-        at2(along, clearance * 2.6), at2(along, -(clearance * 2.6)),
+        at2(across, clearance),
+        at2(across, -clearance),
+        at2(along, clearance + 2),
+        at2(along, -(clearance + 2)),
+        at2(across, clearance * 1.7),
+        at2(across, -clearance * 1.7),
+        at2(along, clearance * 1.9),
+        at2(along, -(clearance * 1.9)),
+        at2(across, clearance * 2.4),
+        at2(across, -(clearance * 2.4)),
+        at2(along, clearance * 2.6),
+        at2(along, -(clearance * 2.6)),
       ];
       // Take the first clear slot; with a crowded summit, take the roomiest.
       let chosen: [number, number] = [0, 0];
@@ -522,7 +681,8 @@ export class CourseMap {
       for (const spot of ring) {
         const candidate = { x: at.x + spot[0], y: at.y + spot[1] };
         const room = placed.reduce(
-          (closest, p) => Math.min(closest, Math.hypot(p.x - candidate.x, p.y - candidate.y)),
+          (closest, p) =>
+            Math.min(closest, Math.hypot(p.x - candidate.x, p.y - candidate.y)),
           Number.POSITIVE_INFINITY,
         );
         if (room >= clearance) {
@@ -542,7 +702,10 @@ export class CourseMap {
 
   /** A camera flight respects a visitor who asked for less motion. */
   private cameraMs(milliseconds: number): number {
-    return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : milliseconds;
+    return typeof matchMedia === 'function' &&
+      matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 0
+      : milliseconds;
   }
 
   /**
@@ -550,7 +713,12 @@ export class CourseMap {
    * reserve that part, so whatever they fit lands where it can be seen: the sheet
    * is a column on a wide screen and a band on a narrow one.
    */
-  private sheetPadding(base: number): { top: number; right: number; bottom: number; left: number } {
+  private sheetPadding(base: number): {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  } {
     const rect = document.querySelector('.panel')?.getBoundingClientRect();
     const clear = { top: base, right: base, bottom: base, left: base };
     if (!rect || rect.width === 0) return clear;
@@ -562,9 +730,16 @@ export class CourseMap {
 
   fitToArea(area: LngLat[]): void {
     // `LngLatBounds.extend` mutates and returns nothing.
-    const bounds = new maplibregl.LngLatBounds([area[0].lng, area[0].lat], [area[0].lng, area[0].lat]);
+    const bounds = new maplibregl.LngLatBounds(
+      [area[0].lng, area[0].lat],
+      [area[0].lng, area[0].lat],
+    );
     for (const point of area) bounds.extend([point.lng, point.lat]);
-    this.map.fitBounds(bounds, { padding: this.sheetPadding(80), duration: this.cameraMs(450), maxZoom: 14 });
+    this.map.fitBounds(bounds, {
+      padding: this.sheetPadding(80),
+      duration: this.cameraMs(450),
+      maxZoom: 14,
+    });
   }
 
   /**
@@ -589,21 +764,36 @@ export class CourseMap {
     mark.style.transform = `rotate(${bearing.toFixed(1)}deg)`;
     mark.innerHTML = ROUTE_START_MARK;
     holder.appendChild(mark);
-    this.startMarker = new maplibregl.Marker({ element: holder, anchor: 'center' })
+    this.startMarker = new maplibregl.Marker({
+      element: holder,
+      anchor: 'center',
+    })
       .setLngLat([route.points[1], route.points[0]])
       .addTo(this.map);
   }
 
   /** Frames the drawn area together with the climbs found from it. */
   fitToAreaAndRoutes(area: LngLat[] | null, routes: Route[]): void {
-    const first = area?.[0] ?? (routes[0] ? { lng: routes[0].points[1], lat: routes[0].points[0] } : null);
+    const first =
+      area?.[0] ??
+      (routes[0]
+        ? { lng: routes[0].points[1], lat: routes[0].points[0] }
+        : null);
     if (!first) return;
-    const bounds = new maplibregl.LngLatBounds([first.lng, first.lat], [first.lng, first.lat]);
+    const bounds = new maplibregl.LngLatBounds(
+      [first.lng, first.lat],
+      [first.lng, first.lat],
+    );
     for (const point of area ?? []) bounds.extend([point.lng, point.lat]);
     for (const route of routes) {
-      for (let i = 0; i < route.points.length; i += 3) bounds.extend([route.points[i + 1], route.points[i]]);
+      for (let i = 0; i < route.points.length; i += 3)
+        bounds.extend([route.points[i + 1], route.points[i]]);
     }
-    this.map.fitBounds(bounds, { padding: this.sheetPadding(60), duration: this.cameraMs(600), maxZoom: 14.5 });
+    this.map.fitBounds(bounds, {
+      padding: this.sheetPadding(60),
+      duration: this.cameraMs(600),
+      maxZoom: 14.5,
+    });
   }
 }
 

@@ -35,10 +35,11 @@ jobs:
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
 
-      - name: Type-check the dashboard
+      - name: Check and type-check the dashboard
         working-directory: dashboard
         run: |
           npm ci
+          npx prettier --check .
           npx tsc --noEmit
 
   image:

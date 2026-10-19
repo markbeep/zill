@@ -42,7 +42,10 @@ const EMPTY = /\s*\(\s*\)/;
 const SPLIT = /\|/g;
 const SPACES = /\s+/g;
 
-export async function findPlaces(text: string, signal: AbortSignal): Promise<Place[]> {
+export async function findPlaces(
+  text: string,
+  signal: AbortSignal,
+): Promise<Place[]> {
   const url = new URL(ENDPOINT);
   url.searchParams.set('searchText', text);
   url.searchParams.set('type', 'locations');
@@ -50,8 +53,11 @@ export async function findPlaces(text: string, signal: AbortSignal): Promise<Pla
   url.searchParams.set('limit', String(LIMIT));
 
   const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error(`the place search answered ${response.status}`);
-  const body = (await response.json()) as { results?: { attrs?: Record<string, unknown> }[] };
+  if (!response.ok)
+    throw new Error(`the place search answered ${response.status}`);
+  const body = (await response.json()) as {
+    results?: { attrs?: Record<string, unknown> }[];
+  };
 
   const seen = new Set<string>();
   return (body.results ?? []).flatMap((result) => {
@@ -66,7 +72,13 @@ export async function findPlaces(text: string, signal: AbortSignal): Promise<Pla
       .replace(SPLIT, ' · ')
       .replace(SPACES, ' ')
       .trim();
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || label === '' || seen.has(label)) return [];
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      label === '' ||
+      seen.has(label)
+    )
+      return [];
     seen.add(label);
     const origin = String(attrs.origin ?? '');
     return [{ label, lat, lng, zoom: ZOOM_BY_ORIGIN[origin] ?? FALLBACK_ZOOM }];

@@ -1,4 +1,9 @@
-export type GpxRoute = { rank: number; elevation: number; distance: number; points: Float32Array };
+export type GpxRoute = {
+  rank: number;
+  elevation: number;
+  distance: number;
+  points: Float32Array;
+};
 
 /** One `<trk>` element, matching the CLI's `writeGpx` shape (7 decimal places). */
 function trackXml(route: GpxRoute): string {
@@ -25,8 +30,14 @@ export function routeToGpx(route: GpxRoute, createdAt: Date): string {
 }
 
 /** Saves one or more routes as a single GPX download. */
-export function downloadGpx(routes: GpxRoute[], filename: string, createdAt: Date): void {
-  const url = URL.createObjectURL(new Blob([gpxDocument(routes, createdAt)], { type: 'application/gpx+xml' }));
+export function downloadGpx(
+  routes: GpxRoute[],
+  filename: string,
+  createdAt: Date,
+): void {
+  const url = URL.createObjectURL(
+    new Blob([gpxDocument(routes, createdAt)], { type: 'application/gpx+xml' }),
+  );
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
