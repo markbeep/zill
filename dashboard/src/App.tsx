@@ -659,11 +659,17 @@ export default function App() {
   }
 
   // The drawn area lives in the fragment, so a copied URL carries the figure.
+  // Written once the figure settles: browsers rate-limit history writes, and a
+  // throw there would abort the update that also redraws the map.
+  let hashTimer: number | undefined;
   createEffect(() => {
     const current = area();
     const hash = current ? areaHash(current) : '';
+    clearTimeout(hashTimer);
     if (location.hash === hash) return;
-    history.replaceState(history.state, '', hash || location.pathname + location.search);
+    hashTimer = setTimeout(() => {
+      history.replaceState(history.state, '', hash || location.pathname + location.search);
+    }, 300);
   });
 
   // The drawn area drives both the map layers and the start-node query.
@@ -836,7 +842,11 @@ export default function App() {
                 }}
                 aria-label={`point ${index + 1} of ${area()?.length}. drag to move, arrow keys to nudge, shift-click or delete to remove. dragging anywhere on an edge adds a point.`}
                 on:pointerdown={(event) => {
-                  if (activePointers.size > 1) return;
+                  activePointers.add(event.pointerId);
+                  if (activePointers.size > 1) {
+                    abortDrag();
+                    return;
+                  }
                   if (event.shiftKey) {
                     event.preventDefault();
                     event.stopPropagation();
